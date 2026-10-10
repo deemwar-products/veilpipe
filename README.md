@@ -12,6 +12,7 @@ git clone https://github.com/deemwar-products/veilpipe && cd veilpipe
 ln -s "$PWD/bin/veilpipe" ~/.local/bin/veilpipe     # the CLI
 veilpipe install                                     # every new Claude Code session loads the mod
 ```
+Or in one step (clones the pinned release to ~/.veilpipe, links the CLI, installs, runs doctor): `sh scripts/install.sh`.
 To try it in one session only, skip `veilpipe install` and run `claude --plugin-dir /path/to/veilpipe`.
 
 ## First 5 minutes
