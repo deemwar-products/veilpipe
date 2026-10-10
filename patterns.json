@@ -1,0 +1,475 @@
+{
+  "allow": {
+    "regexes": [
+      {
+        "regex": "x{5,}",
+        "flags": "i"
+      },
+      {
+        "regex": "^(?:your|my)[-_ ]?[a-z0-9]",
+        "flags": "i"
+      },
+      {
+        "regex": "(?:replace|change|generate|get)[-_ ]?(?:me|with|the|a|this|your)(?:\\b|_|-)|changeme",
+        "flags": "i"
+      },
+      {
+        "regex": "example|placeholder|dummy|sample|insecure|todo|fixme",
+        "flags": "i"
+      },
+      {
+        "regex": "^(?:password|passwd|secret|postgres|mysql|root|admin|test|testpass|pass|guest|default|demo|letmein|qwerty|123456)$",
+        "flags": "i"
+      },
+      {
+        "regex": "^[a-z][a-z_-]*(?:password|passwd|secret|key|token|pass)[a-z_-]*$",
+        "flags": "i"
+      },
+      {
+        "regex": "^(?:cafebabe|deadbeef|0+|1234567890?)+$",
+        "flags": "i"
+      }
+    ]
+  },
+  "patterns": [
+    {
+      "name": "STRIPE_KEY",
+      "regex": "\\b[sr]k_(?:live|test)_[A-Za-z0-9]{24,}",
+      "examples": {
+        "hit": [
+          "key sk_live_FAKEFAKEFAKEFAKEFAKEFAKE00",
+          "rk_test_FAKEFAKEFAKEFAKEFAKEFAKE00"
+        ],
+        "miss": [
+          "sk_live_short",
+          "the sk_live_ prefix means production"
+        ]
+      }
+    },
+    {
+      "name": "ANTHROPIC_API_KEY",
+      "regex": "\\bsk-ant-[A-Za-z0-9_-]{20,}",
+      "examples": {
+        "hit": [
+          "sk-ant-api03-FAKE_FAKE_FAKE_FAKE_FAKE"
+        ],
+        "miss": [
+          "sk-ant-"
+        ]
+      }
+    },
+    {
+      "name": "OPENAI_API_KEY",
+      "regex": "\\bsk-(?:proj-)?[A-Za-z0-9_-]{32,}",
+      "examples": {
+        "hit": [
+          "sk-proj-FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE00"
+        ],
+        "miss": [
+          "sk-short-thing"
+        ]
+      }
+    },
+    {
+      "name": "GITHUB_TOKEN",
+      "regex": "\\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})",
+      "examples": {
+        "hit": [
+          "ghp_FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE0000",
+          "github_pat_FAKE_FAKE_FAKE_FAKE_FAKE_FAKE_00"
+        ],
+        "miss": [
+          "ghp_",
+          "the gh CLI"
+        ]
+      }
+    },
+    {
+      "name": "AWS_ACCESS_KEY_ID",
+      "regex": "\\b(?:AKIA|ASIA)[0-9A-Z]{16}\\b",
+      "examples": {
+        "hit": [
+          "AKIAFAKEFAKEFAKEFAKE"
+        ],
+        "miss": [
+          "AKIA123"
+        ]
+      }
+    },
+    {
+      "name": "AWS_SECRET_ACCESS_KEY",
+      "regex": "\\baws_secret_access_key\\s*[:=]\\s*[\"']?([A-Za-z0-9/+]{40})\\b",
+      "flags": "i",
+      "group": 1,
+      "examples": {
+        "hit": [
+          "aws_secret_access_key = FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE0000"
+        ],
+        "miss": [
+          "aws_secret_access_key = $AWS_SECRET_ACCESS_KEY"
+        ]
+      }
+    },
+    {
+      "name": "SLACK_TOKEN",
+      "regex": "\\bxox[abpr]-[A-Za-z0-9-]{10,}",
+      "examples": {
+        "hit": [
+          "xoxb-FAKE-FAKE-FAKE-0000"
+        ],
+        "miss": [
+          "xoxb-"
+        ]
+      }
+    },
+    {
+      "name": "GOOGLE_API_KEY",
+      "regex": "\\bAIza[0-9A-Za-z_-]{35}\\b",
+      "examples": {
+        "hit": [
+          "AIzaFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE000"
+        ],
+        "miss": [
+          "AIza"
+        ]
+      }
+    },
+    {
+      "name": "JWT",
+      "regex": "\\beyJ[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}",
+      "examples": {
+        "hit": [
+          "eyJGQUtFRkFLRUZBS0UiOjF9.eyJGQUtFRkFLRUZBS0UiOjF9.FAKEFAKEFAKEFAKE"
+        ],
+        "miss": [
+          "eyJhbGciOi"
+        ]
+      }
+    },
+    {
+      "name": "PRIVATE_KEY",
+      "regex": "-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]+?-----END [A-Z ]*PRIVATE KEY-----",
+      "examples": {
+        "hit": [
+          "-----BEGIN PRIVATE KEY-----\nFAKEFAKE\n-----END PRIVATE KEY-----"
+        ],
+        "miss": [
+          "-----BEGIN PUBLIC KEY-----"
+        ]
+      }
+    },
+    {
+      "name": "DB_PASSWORD",
+      "regex": "\\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\\+srv)?|rediss?|amqps?|mssql)://[^\\s:/@]+:([^\\s@/]{3,})@",
+      "flags": "i",
+      "group": 1,
+      "examples": {
+        "hit": [
+          "postgres://app:FakePassw0rd@db.example.com:5432/app"
+        ],
+        "miss": [
+          "postgres://app@db.example.com/app",
+          "postgres://app:${DB_PASSWORD}@db/app"
+        ]
+      }
+    },
+    {
+      "name": "SECRET",
+      "regex": "\\b((?:[A-Za-z_][A-Za-z0-9_]*)?(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|_PW|PWD)(?:_BASE)?)[\"']?[ \\t]*[:=][ \\t]*[\"']?([^\\s\"'`,;]{8,})",
+      "flags": "i",
+      "group": 2,
+      "nameGroup": 1,
+      "examples": {
+        "hit": [
+          "WEBHOOK_SECRET=FAKE0000FAKE0000",
+          "\"api_token\": \"FAKE0000FAKE0000\"",
+          "DB_PASSWORD=hunterhunter",
+          "api_key = 'abcdefghijkl'",
+          "AUTH_TOKEN: Fak3T0kenFak3",
+          "FTP_PASSWD='geheim$parole'",
+          "api_key: Fak3Key0000Fak3",
+          "CLIENT_SECRET: \"Fak3Secret0000\",",
+          "SECRET_KEY_BASE=Fak3BaseFak3Base00",
+          "\"password\": \"Fak3Pass0000\"",
+          "apiKey: \"Fak3Key0000Fak3\"",
+          "access_token = 'Fak3Tok0000Fak3'",
+          "appKey: \"Fak3App0000Fak3\"",
+          "signingKey = 'Fak3Sig0000Fak3'",
+          "DB_PASSWORD='correct-horse-battery-staple'",
+          "API_KEY = 'fak3-key-0000-fak3'"
+        ],
+        "miss": [
+          "API_KEY=$API_KEY",
+          "STRIPE_KEY=YOUR_KEY_HERE",
+          "monkey = banana",
+          "self.authkey = process.AuthenticationString(authkey)",
+          "current_token = get_cache_token()",
+          "registry_key = cls.REGISTRY_KEY",
+          "new_key = max(keys) + 1",
+          "oldkey = root[KEY]",
+          "conn = Client(address, authkey=self._authkey)",
+          "self.pwd = pwd",
+          "ERRORTOKEN = token.ERRORTOKEN",
+          "SIOCIFGETPKEY                 = -0x7fdf969b",
+          "publicKey: publicKey,",
+          "SessionTicketKey:            c.SessionTicketKey,",
+          "cancelKey:  req.cancelKey,",
+          "clientSecret: oauthSecret,",
+          "DATA_PROXY_SECRET: \"MINIFLARE_PROXY_SECRET\",",
+          "clientSecret: LEGACY_CLIENT_SECRET_FIELD,",
+          "droppedKey: \"settings\",",
+          "attrsKey: \"attributes\"",
+          "lastSignificantToken = \"?InterpolationInTemplate\";",
+          "key: \"somethingLong\"",
+          "wrapperKey: \"somethingLong\"",
+          "const X_HONO_DISABLE_SSG_HEADER_KEY = \"x-hono-disable-ssg\";",
+          "UI_EXTENSION_KEY = 'io.modelcontextprotocol/ui'"
+        ]
+      },
+      "allow": [
+        {
+          "regexes": [
+            {
+              "regex": "[()\\[\\]{}]"
+            },
+            {
+              "regex": "^(?:password|passwd|passphrase|pwd|secret|token|none|null|nil|true|false|undefined)$",
+              "flags": "i"
+            },
+            {
+              "regex": "^-?(?:0[xX][0-9a-fA-F]+|\\d+)$"
+            },
+            {
+              "regex": "^[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)+$"
+            },
+            {
+              "regex": "^[A-Z][A-Z]*(?:_[A-Z]+)+$"
+            }
+          ]
+        },
+        {
+          "target": "match",
+          "regexes": [
+            {
+              "regex": "^[a-z_][a-z0-9_.]*[ \\t]*=[ \\t]*[A-Za-z_][A-Za-z_.]*$"
+            },
+            {
+              "regex": "[ \\t](?:is|was)[ \\t]+[a-z]+$"
+            },
+            {
+              "regex": "[ \\t]=[ \\t]*[A-Za-z_][A-Za-z_.]*$"
+            },
+            {
+              "regex": "^([A-Za-z_]\\w*)[\"']?[ \\t]*[:=][ \\t]*[\"']?\\1\\b",
+              "flags": "i"
+            },
+            {
+              "regex": "^(?=[a-z])(?!(?i:[A-Za-z0-9_]*(?:api|access|secret|private|auth|client|signing|signature|encrypt|master|service|license|bot|bearer|refresh|session|consumer|webhook|deploy|admin|personal|oauth|jwt|app_?key|app_?token|pass|credential)))[A-Za-z0-9_]*(?i:key|token)[\"']?[ \\t]*[:=]"
+            },
+            {
+              "regex": "(?:KEY|TOKEN|Key|Token|key|token)[\"']?[ \\t]*[:=][ \\t]*[\"'][a-z]+(?:[-./_][a-z]+)+[\"']?$"
+            }
+          ]
+        },
+        {
+          "target": "line",
+          "regexes": [
+            {
+              "regex": "[:=][ \\t]*[A-Za-z_][A-Za-z_.]*[ \\t]*[,;})]"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "PASSWORD",
+      "regex": "\\b(?:password|passwd|passphrase|pwd)(?:(?:[ \\t]+(?:for|of|on|to)[ \\t]+[\\w.@/-]+(?:[ \\t]+[\\w.@/-]+){0,4}?)?[ \\t]+(?:is|was)[ \\t]+|[\"']?[ \\t]*[:=][ \\t]*)[\"']?([^\\s\"'`,;]{6,})",
+      "flags": "i",
+      "group": 1,
+      "examples": {
+        "hit": [
+          "my password is Fake-Pass-0000",
+          "password: FakePass0000",
+          "password = 'hunterhunter'",
+          "password: hunter2hunter2",
+          "my password is hunter2",
+   "password for the staging box is Fake-Pass-0000",
+   "the password for root@db-1 was FakePass0000",
+          "password: hunterhunter"
+        ],
+        "miss": [
+          "reset the password for the admin user",
+   "the password for the admin user is required",
+   "password for this account is incorrect",
+   "password for $USER is $DB_PASSWORD",
+          "password changes weekly",
+          "password is $DB_PASSWORD",
+          "pwd = os.getcwd()",
+          "passwd = fallback_getpass(prompt, stream)",
+          "password = None",
+          "passwd = passwd + 'anonymous@'",
+          "- password: password to use with username",
+          "def read(self, name, pwd=None):",
+          "if no login/password was specified",
+          "password =\nNone_of_your_business",
+          "if (hasDirect) return { passphrase: direct };"
+        ]
+      },
+      "allow": [
+        {
+          "regexes": [
+            {
+              "regex": "[()\\[\\]{}]"
+            },
+            {
+              "regex": "^(?:password|passwd|passphrase|pwd|secret|token|none|null|nil|true|false|undefined)$",
+              "flags": "i"
+            },
+            {
+              "regex": "^-?(?:0[xX][0-9a-fA-F]+|\\d+)$"
+            },
+            {
+              "regex": "^[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)+$"
+            },
+            {
+              "regex": "^[A-Z][A-Z]*(?:_[A-Z]+)+$"
+            }
+          ]
+        },
+        {
+          "target": "match",
+          "regexes": [
+            {
+              "regex": "^[a-z_][a-z0-9_.]*[ \\t]*=[ \\t]*[A-Za-z_][A-Za-z_.]*$"
+            },
+            {
+              "regex": "[ \\t](?:is|was)[ \\t]+[a-z]+$"
+            },
+            {
+              "regex": "[ \\t]=[ \\t]*[A-Za-z_][A-Za-z_.]*$"
+            },
+            {
+              "regex": "^([A-Za-z_]\\w*)[\"']?[ \\t]*[:=][ \\t]*[\"']?\\1\\b",
+              "flags": "i"
+            }
+          ]
+        },
+        {
+          "target": "line",
+          "regexes": [
+            {
+              "regex": "[:=][ \\t]*[A-Za-z_][A-Za-z_.]*[ \\t]*[,;})]"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "LOGIN_PASSWORD",
+      "regex": "\\b(?:login|logins|creds|credentials)(?:[ \\t]+(?:for|on|to)[ \\t]+[\\w.@-]+(?:[ \\t]+[\\w.@-]+){0,3}?)?(?:[ \\t]+(?:is|are)[ \\t]+|[ \\t]*[:=][ \\t]*)[\\w.@+-]{1,40}[ \\t]*/[ \\t]*([^\\s\\\"'`,;/]{6,})(?=[\\s\\\"'`,;.]|$)",
+      "flags": "i",
+      "group": 1,
+      "examples": {
+        "hit": [
+          "login is admin / Tr0ub4dor&3-fake",
+          "creds for prod db: root / FakePw-0000x",
+          "login: admin/Fake#Pass99"
+        ],
+        "miss": [
+          "login is admin / admin",
+          "login is via SSO / Okta",
+          "creds are in vault / 1Password",
+          "login: user/pass",
+          "credentials are username/password",
+          "login is at /admin/login",
+          "login is email / phone",
+          "login for staging is root / see vault",
+          "creds: admin / <redacted>",
+          "credentials: $USER / $PASS"
+        ]
+      },
+      "allow": [
+        {
+          "regexes": [
+            {
+              "regex": "^[A-Za-z]+$"
+            },
+            {
+              "regex": "^[0-9]?Password$",
+              "flags": "i"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "EMAIL",
+      "regex": "(?<![\\w.%+:/-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b",
+      "examples": {
+        "hit": [
+          "mail jane.doe@acme-corp.dev today"
+        ],
+        "miss": [
+          "@example",
+          "user@localhost",
+          "postgres://app:FakePassw0rd@db.example.com/app",
+          "SMTP_FROM=noreply@example.com"
+        ]
+      }
+    }
+  ],
+  "tests": [
+    {
+      "in": "use this key sk_live_FAKEFAKEFAKEFAKEFAKEFAKE00 for stripe",
+      "out": "use this key $STRIPE_KEY for stripe"
+    },
+    {
+      "in": "db is postgres://admin:FakePassw0rd123@db.example.com:5432/app",
+      "out": "db is postgres://admin:$DB_PASSWORD@db.example.com:5432/app"
+    },
+    {
+      "in": "WEBHOOK_SECRET=FAKE0000FAKE0000 and ghp_FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE0000",
+      "out": "WEBHOOK_SECRET=$WEBHOOK_SECRET and $GITHUB_TOKEN"
+    },
+    {
+      "in": "run npm test; the commit sha is 3f9a2b7c1d8e4f6a0b5c9d2e7f1a3b8c4d6e0f2a",
+      "out": "run npm test; the commit sha is 3f9a2b7c1d8e4f6a0b5c9d2e7f1a3b8c4d6e0f2a"
+    },
+    {
+      "in": "OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "out": "OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "in": "JWT_SECRET=your-super-secret-jwt-token-with-at-least-32-characters-long",
+      "out": "JWT_SECRET=your-super-secret-jwt-token-with-at-least-32-characters-long"
+    },
+    {
+      "in": "APP_SECRET=replace_me_with_a_random_string",
+      "out": "APP_SECRET=replace_me_with_a_random_string"
+    },
+    {
+      "in": "SMTP_PASSWORD=smtpPassword",
+      "out": "SMTP_PASSWORD=smtpPassword"
+    },
+    {
+      "in": "DATABASE_URL=postgres://user:password@localhost:5432/app",
+      "out": "DATABASE_URL=postgres://user:password@localhost:5432/app"
+    },
+    {
+      "in": "SMTP_FROM=noreply@example.com",
+      "out": "SMTP_FROM=noreply@example.com"
+    },
+    {
+      "in": "SECRET_KEY_BASE=Fak3Rails0000Fak3Rails0000",
+      "out": "SECRET_KEY_BASE=$SECRET_KEY_BASE"
+    },
+    {
+      "in": "VAULT_ENC_KEY=your-32-character-encryption-key",
+      "out": "VAULT_ENC_KEY=your-32-character-encryption-key"
+    },
+    {
+      "in": "NEXT_PRIVATE_ENCRYPTION_KEY=\"CAFEBABE\"",
+      "out": "NEXT_PRIVATE_ENCRYPTION_KEY=\"CAFEBABE\""
+    }
+  ]
+}

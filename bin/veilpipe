@@ -1,0 +1,10 @@
+#!/bin/sh
+# veilpipe CLI shim: Node >= 22.18 runs the TypeScript source directly.
+# Resolve symlinks without `readlink -f` (missing on older macOS): follow the link chain by hand.
+p=$0
+while [ -L "$p" ]; do
+  t=$(readlink "$p")
+  case $t in /*) p=$t ;; *) p=$(dirname "$p")/$t ;; esac
+done
+here=$(cd "$(dirname "$p")" && pwd -P)
+exec node --no-warnings "$here/../cli/veilpipe.ts" "$@"
