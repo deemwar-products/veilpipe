@@ -8,7 +8,7 @@
 set -eu
 
 main() {
-  REF=${VEILPIPE_REF:-v1.0.2}
+  REF=${VEILPIPE_REF:-v0.1.3}
   DIR=${VEILPIPE_DIR:-$HOME/.veilpipe}
   BIN=${VEILPIPE_BIN:-$HOME/.local/bin}
   REPO=${VEILPIPE_REPO:-https://github.com/deemwar-products/veilpipe}

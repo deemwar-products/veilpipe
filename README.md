@@ -33,7 +33,7 @@ is fixed: it never lets text through unchecked.
 
 ## opencode
 
-Tested with opencode 1.x (1.18.35) and 2.x (2.0.22 to 2.0.26). `veilpipe install --opencode` gives opencode sessions
+Tested with opencode 1.x (1.18.35, 1.19.0) and 2.x (2.0.22 to 2.0.26). `veilpipe install --opencode` gives opencode sessions
 the same protection, from the same patterns file. It writes `00-veilpipe.ts` to opencode's plugin folder; after an
 upgrade from an older kit, run it again. `veilpipe doctor` checks the install, and `veilpipe doctor --canary` also runs
 `opencode/canary.sh`: a real `opencode run` with a fake key against a local mock model (no model spend). It passes only

@@ -1,6 +1,6 @@
 {
   "name": "veilpipe",
-  "version": "1.0.2",
+  "version": "0.1.3",
   "description": "Rewrites secrets to $NAME (regex patterns file) in prompts, tool output and injected text before Claude sees them. Fails closed.",
   "author": { "name": "Deemwar" }
 }
