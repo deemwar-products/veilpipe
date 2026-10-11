@@ -42,6 +42,31 @@ export type PatternsFile = {
   onMatch?: string[]
   // Whole-text tests: `in` must rewrite to exactly `out`.
   tests?: { in: string; out: string }[]
+  // The secret store: caught values are saved under their $NAME for this project (auto, default on) so later
+  // commands and sessions can use them. skip: names never saved (default EMAIL; NAME_2 etc. follow their base).
+  store?: { auto?: boolean; skip?: string[] }
+}
+
+export const STORE_SKIP_DEFAULT = ['EMAIL']
+// Whether a caught value's name is saved: auto on (unless switched off) and its base name not skipped.
+export function storeWants(file: PatternsFile, name: string): boolean {
+  if (file.store?.auto === false) return false
+  const base = name.replace(/_\d+$/, '')
+  return !(file.store?.skip ?? STORE_SKIP_DEFAULT).includes(base)
+}
+
+// Names a shell command uses: $NAME or ${NAME}.
+export function referencedNames(command: string): string[] {
+  return [...new Set([...command.matchAll(/\$\{?([A-Z_][A-Z0-9_]*)\}?/g)].map(m => m[1]!))]
+}
+
+// A command the model wrote that reads the store directly (the mod's own fill prefix is added after this check).
+// Best effort: a disguised read still prints only $NAME, because every stored value is redacted from tool output.
+export function storeReadGuard(command: string): string | undefined {
+  if (/\bsecret\s+_(load|fill|save)\b/.test(command)) return 'runs veilpipe\'s internal store commands'
+  if (/\bsecurity\b[^\n]*\bfind-generic-password\b/.test(command)) return 'reads the Keychain'
+  if (/secrets\.enc|veilpipe\/store\/key/.test(command)) return 'reads the secret store files'
+  return undefined
 }
 
 type CompiledAllow = { regexes: RegExp[]; stopwords: string[]; target: 'secret' | 'match' | 'line' }
@@ -63,18 +88,20 @@ const NAME = /^[A-Z_][A-Z0-9_]*$/
 export function merge(...files: (PatternsFile | undefined)[]): PatternsFile {
   const byName = new Map<string, Pattern>()
   let onMatch: string[] | undefined
+  let store: PatternsFile['store']
   const tests: { in: string; out: string }[] = []
   const allow: Required<Pick<Allow, 'regexes' | 'stopwords'>> = { regexes: [], stopwords: [] }
   for (const f of files) {
     if (!f) continue
     for (const p of f.patterns ?? []) byName.set(p.name, { ...byName.get(p.name), ...p })
     if (f.onMatch) onMatch = f.onMatch
+    if (f.store) store = { ...store, ...f.store }
     tests.push(...(f.tests ?? []))
     allow.regexes.push(...(f.allow?.regexes ?? []))
     allow.stopwords.push(...(f.allow?.stopwords ?? []))
   }
   const hasAllow = allow.regexes.length + allow.stopwords.length > 0
-  return { patterns: [...byName.values()], ...(onMatch ? { onMatch } : {}), tests, ...(hasAllow ? { allow } : {}) }
+  return { patterns: [...byName.values()], ...(onMatch ? { onMatch } : {}), tests, ...(hasAllow ? { allow } : {}), ...(store ? { store } : {}) }
 }
 
 // Inline modifier groups ((?i:...), (?-i:...)) need Node 23+ (V8 12.5); the vendored gitleaks rules use them in 40 of
@@ -516,13 +543,18 @@ export function onMatchArgv(argv: string[], name: string): string[] {
   return argv.map(a => a.replace(/\{name\}/g, name))
 }
 
-// The note the model gets beside a rewritten prompt or tool result.
-export function note(fresh: Found[]): string {
+// The note the model gets beside a rewritten prompt or tool result. fillable: names the store holds, which a Bash
+// command fills in when it runs; for any other name the note says plainly that commands cannot use it.
+export function note(fresh: Found[], fillable: Set<string> = new Set()): string {
   const names = fresh.map(f => `$${f.name}`).join(', ')
+  const can = fresh.filter(f => fillable.has(f.name)).map(f => f.name)
+  const cannot = fresh.filter(f => !fillable.has(f.name)).map(f => `$${f.name}`)
+  const one = can[0] ?? fresh[0]?.name ?? 'NAME'
   return (
     `veilpipe replaced ${fresh.length} sensitive value${fresh.length === 1 ? '' : 's'} with ${names} before you saw ${fresh.length === 1 ? 'it' : 'them'}. ` +
-    `Use ${fresh.length === 1 ? 'it' : 'them'} as shell variables in Bash ("$${fresh[0]?.name ?? 'NAME'}"); the value is filled in when the command runs. ` +
-    `In code, read ${fresh.length === 1 ? 'it' : 'them'} from the environment (process.env.${fresh[0]?.name ?? 'NAME'}, os.environ["${fresh[0]?.name ?? 'NAME'}"]); never write the text $${fresh[0]?.name ?? 'NAME'} into a file, it is not the value. ` +
-    'Do not ask the user to paste the value again, and do not try to print, slice or encode it.'
+    (can.length ? `${can.map(n => `$${n}`).join(', ')} ${can.length === 1 ? 'is' : 'are'} in the user's local secret store: write ${can.length === 1 ? 'it' : 'them'} as shell variables in Bash ("$${one}") and the value is filled in when the command runs. ` : '') +
+    (cannot.length ? `${cannot.join(', ')} ${cannot.length === 1 ? 'is' : 'are'} not available to commands; if one is needed, ask the user to run \`veilpipe secret add ${cannot[0]!.slice(1)}\` themselves (never to paste the value here). ` : '') +
+    `In code, read values from the environment (process.env.${one}, os.environ["${one}"]); never write the text $${one} into a file, it is not the value. ` +
+    'Do not ask the user to paste a value again, and do not try to print, slice or encode it.'
   )
 }

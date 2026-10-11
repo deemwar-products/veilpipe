@@ -7,10 +7,11 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 
-import { compile, deepMap, merge, onMatchArgv, parseLossless, redact, runTests, scan, scrubJsonl } from '../hooks/core.ts'
+import { compile, deepMap, merge, onMatchArgv, parseLossless, redact, referencedNames, runTests, scan, scrubJsonl } from '../hooks/core.ts'
 import type { Pattern, PatternsFile } from '../hooks/core.ts'
 import { STATE_FILES, V2_FILE_DIRS, backupStore, compactStore, dataDir, findInStore, fixStore, planStore, recentFiles, stateDir, storePath } from '../opencode/store.ts'
 import type { Db } from '../opencode/store.ts'
+import { GLOBAL, Store, backend, checkName, scopeOf } from './secrets.ts'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const DEFAULTS = join(ROOT, 'patterns.json')
@@ -47,7 +48,7 @@ export function mask(v: string): string {
 
 type Flags = { [k: string]: string | true | undefined }
 
-function parse(argv: string[]): { pos: string[]; flags: Flags; multi: { [k: string]: string[] } } {
+function parse(argv: string[], switches: string[] = []): { pos: string[]; flags: Flags; multi: { [k: string]: string[] } } {
   const pos: string[] = []
   const flags: Flags = {}
   const multi: { [k: string]: string[] } = {}
@@ -61,7 +62,7 @@ function parse(argv: string[]): { pos: string[]; flags: Flags; multi: { [k: stri
     // '-----BEGIN ... KEY-----') is input to scan, never swallowed as a flag.
     if (/^--[a-z][\w-]*(=|$)/i.test(a)) {
       const [k, inline] = a.slice(2).split(/=(.*)/s, 2) as [string, string | undefined]
-      const takesValue = ['patterns', 'group', 'name-group', 'flags', 'replace', 'hit', 'miss', 'dir', 'recent', 'days'].includes(k)
+      const takesValue = ['patterns', 'group', 'name-group', 'flags', 'replace', 'hit', 'miss', 'dir', 'recent', 'days'].includes(k) && !switches.includes(k)
       const v = inline ?? (takesValue ? argv[++i] : true)
       if (v === undefined) throw new Error(`--${k} needs a value`)
       flags[k] = v
@@ -77,7 +78,8 @@ function readInput(pos: string[]): string {
   return pos.join(' ')
 }
 
-type Out = { out: (s: string) => void; err: (s: string) => void }
+// input: where a secret value is read from (stdin by default; tests pass their own).
+type Out = { out: (s: string) => void; err: (s: string) => void; input?: () => string }
 
 function scanCmd(pos: string[], flags: Flags, io: Out): number {
   const file = load({ patterns: flags.patterns as string | undefined })
@@ -552,9 +554,9 @@ function auditCmd(flags: Flags, io: Out): number {
 
 // --- doctor -------------------------------------------------------------------------------------------------
 
-type Run = (argv: string[]) => { status: number | null; stdout: string }
-const realRun: Run = ([cmd, ...args]) => {
-  const p = spawnSync(cmd!, args, { encoding: 'utf8', timeout: 180_000 })
+type Run = (argv: string[], o?: { cwd?: string; env?: NodeJS.ProcessEnv }) => { status: number | null; stdout: string }
+const realRun: Run = ([cmd, ...args], o = {}) => {
+  const p = spawnSync(cmd!, args, { encoding: 'utf8', timeout: 180_000, ...(o.cwd ? { cwd: o.cwd } : {}), ...(o.env ? { env: o.env } : {}) })
   return { status: p.error ? null : p.status, stdout: p.stdout ?? '' }
 }
 
@@ -655,7 +657,8 @@ export function doctor(opts: { canary?: boolean; run?: Run; env?: NodeJS.Process
 
   if (opts.canary) {
     const sid = randomUUID()
-    const r = run(['claude', '-p', '--model', 'sonnet', '--plugin-dir', ROOT, '--session-id', sid, `Repeat my message back verbatim in backticks, then stop: deploy with ${CANARY}`])
+    // VEILPIPE_NO_STORE: the fake key must not be auto-saved into the person's store.
+    const r = run(['claude', '-p', '--model', 'sonnet', '--plugin-dir', ROOT, '--session-id', sid, `Repeat my message back verbatim in backticks, then stop: deploy with ${CANARY}`], { env: { ...env, VEILPIPE_NO_STORE: '1' } })
     const sawName = r.stdout.includes('$STRIPE_KEY')
     const sawRaw = r.stdout.includes(CANARY)
     add(sawName && !sawRaw ? 'ok' : 'fail', 'canary: model', sawRaw ? 'the model saw the raw fake key' : sawName ? 'the model saw $STRIPE_KEY' : `no answer to judge (exit ${r.status})`)
@@ -666,7 +669,55 @@ export function doctor(opts: { canary?: boolean; run?: Run; env?: NodeJS.Process
       add(raw === 0 ? 'ok' : 'fail', 'canary: disk', raw === 0 ? 'transcript holds 0 copies of the fake key' : `transcript holds ${raw} raw copies`)
     }
   }
+  storeChecks(add, { env, run, config, canary: !!opts.canary })
   return checks
+}
+
+// Obviously fake, and stored only for the length of the store canary.
+const STORE_CANARY = 'sk_live_FAKESTORECANARYFAKESTORE00'
+
+// The secret store: it opens with its key (Keychain on macOS), its files are private, no project folder of it has
+// gone missing. --canary: a fake value is stored for a scratch project, a real session fills it into a command, and
+// the model and transcript never hold it; the entry and the scratch folder are removed after.
+function storeChecks(add: (l: Check['level'], n: string, d: string) => void, o: { env: NodeJS.ProcessEnv; run: Run; config: string; canary: boolean }) {
+  const store = new Store(home(o.env), o.env)
+  let where = 'a key file'
+  try {
+    where = backend(o.env) === 'keychain' ? 'the macOS Keychain' : join(store.dir, 'key')
+    if (!store.exists()) add('ok', 'store', `empty; caught values are saved on first use (key in ${where})`)
+    else {
+      const entries = store.read()
+      const loose = [store.file, join(store.dir, 'key')].filter(f => existsSync(f) && (statSync(f).mode & 0o077) !== 0)
+      const scopes = new Set(entries.map(e => e.scope)).size
+      add(loose.length ? 'fail' : 'ok', 'store', loose.length ? `readable by others: chmod 600 ${loose.join(' ')}` : `${entries.length} secret(s) in ${scopes} scope(s); key in ${where}`)
+      for (const g of store.orphans())
+        add('warn', 'store: moved?', `${g.count} secret(s) belong to ${g.scope}, which no longer exists; if the project moved: veilpipe secret move '${g.scope}' NEW_FOLDER`)
+    }
+  } catch (err) {
+    add('fail', 'store', (err as Error).message)
+    return
+  }
+  if (!o.canary) return
+  const dir = join(o.env.TMPDIR ?? '/tmp', `veilpipe-store-canary-${randomUUID()}`)
+  mkdirSync(join(dir, '.git'), { recursive: true })
+  const scope = scopeOf(dir)
+  try {
+    store.add(scope, 'VEILPIPE_CANARY', STORE_CANARY)
+    const sid = randomUUID()
+    const r = o.run(['claude', '-p', '--model', 'sonnet', '--plugin-dir', ROOT, '--allowedTools=Bash', '--session-id', sid,
+      'Run exactly this one Bash command and reply with its output only: printf %s "$VEILPIPE_CANARY" | wc -c'], { cwd: dir })
+    const got = r.stdout.match(/\d+/)?.[0]
+    const raw = r.stdout.includes(STORE_CANARY)
+    const transcript = findTranscript(join(o.config, 'projects'), sid)
+    const onDisk = transcript ? readFileSync(transcript, 'utf8').split(STORE_CANARY).length - 1 : 0
+    const ok = got === String(STORE_CANARY.length) && !raw && onDisk === 0
+    add(ok ? 'ok' : 'fail', 'canary: store', ok ? `a stored fake value was filled into a real command in a new session (${got} chars); model and transcript hold 0 copies (key in ${where})`
+      : raw || onDisk ? `the raw fake value reached the ${raw ? 'model' : 'transcript'}` : `the command did not get the stored value (got ${got ?? 'no answer'}, expected ${STORE_CANARY.length})`)
+    if (transcript) rmSync(transcript, { force: true })
+  } finally {
+    try { store.rm(scope, 'VEILPIPE_CANARY') } catch {}
+    rmSync(dir, { recursive: true, force: true })
+  }
 }
 
 function findTranscript(projects: string, sid: string): string | undefined {
@@ -705,6 +756,12 @@ const HELP = `veilpipe: rewrite secrets to $NAME before Claude sees them.
   veilpipe audit --opencode [--dry-run|--fix]  the same for opencode's session store (opencode.db), TUI history, shell output and logs;
                                      without --fix it lists the table.columns, rows and files --fix would rewrite; --fix backs up first
   veilpipe doctor [--canary]        is it installed and working? --canary runs a fake key through claude -p
+  veilpipe secret add NAME [--global] [--replace]   store a value (from stdin or a prompt, never argv) for this project
+  veilpipe secret ls [--global | --all]   names, lengths and dates (--all: every scope, names only); never values
+  veilpipe secret rm NAME [--global]
+  veilpipe exec 'command using $NAME'   run it with the stored values filled in; its output shows $NAME, never the value
+  veilpipe secret move OLD_FOLDER NEW_FOLDER   a project folder moved or was renamed: its secrets follow
+                                     scope = the nearest git root (else the folder); --global is the fallback scope
 
   --patterns FILE   use only this patterns file (add/rm edit it)`
 
@@ -734,6 +791,108 @@ export function scrubLargeFile(path: string, known: Map<string, string>, attempt
   return 'busy'
 }
 
+// A value typed at a terminal is read without echo; otherwise it is stdin. Never argv.
+function readSecret(io: Out): string {
+  if (io.input) return io.input()
+  if (process.stdin.isTTY) {
+    process.stderr.write('value (not shown): ')
+    const r = spawnSync('sh', ['-c', 'stty -echo; IFS= read -r v; s=$?; stty echo; printf %s "$v"; exit $s'], { stdio: ['inherit', 'pipe', 'inherit'], encoding: 'utf8' })
+    process.stderr.write('\n')
+    return r.stdout
+  }
+  return readFileSync(0, 'utf8').replace(/\r?\n$/, '')
+}
+
+const shq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`
+
+// veilpipe exec 'command': runs it with sh -c, the stored values of the names it uses in its environment, and
+// prints its output with every stored value of this project replaced by its $NAME. The exit code passes through.
+function execCmd(pos: string[], io: Out): number {
+  if (pos.length !== 1) throw new Error(`usage: veilpipe exec 'command using $NAME'  (one quoted argument, so your shell does not expand $NAME first)`)
+  const command = pos[0]!
+  const store = new Store(home())
+  const vis = store.exists() ? store.visible(scopeOf(process.cwd())) : []
+  const used = referencedNames(command).filter(n => vis.some(e => e.name === n))
+  const env = { ...process.env, ...Object.fromEntries(used.map(n => [n, vis.find(e => e.name === n)!.value])) }
+  const r = spawnSync('sh', ['-c', command], { env, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, stdio: ['inherit', 'pipe', 'pipe'] })
+  const known = new Map(vis.map(e => [e.value, e.name] as [string, string]))
+  const clean = (t: string) => [...known].sort((a, b) => b[0].length - a[0].length).reduce((acc, [v, n]) => acc.split(v).join(`$${n}`), t)
+  if (r.stdout) process.stdout.write(clean(r.stdout))
+  if (r.stderr) process.stderr.write(clean(r.stderr))
+  if (r.error) throw r.error
+  return r.status ?? 1
+}
+
+function secretCmd(pos: string[], flags: Flags, io: Out): number {
+  const [sub, ...args] = pos
+  const store = new Store(home())
+  const scope = flags.global ? GLOBAL : scopeOf(process.cwd())
+  const shown = (s: string) => (s === GLOBAL ? 'global' : s)
+  switch (sub) {
+    case 'add': {
+      if (args.length !== 1) throw new Error('usage: veilpipe secret add NAME [--global] [--replace]  (the value comes from stdin or a prompt, never the command line)')
+      const name = checkName(args[0]!.replace(/^\$/, ''))
+      const how = store.add(scope, name, readSecret(io), flags.replace === true)
+      io.out(`${how} $${name} for ${shown(scope)}`)
+      return 0
+    }
+    case 'ls': {
+      const entries = store.read()
+      if (flags.all) {
+        for (const e of entries) io.out(`${shown(e.scope)}\t$${e.name}`)
+        return 0
+      }
+      for (const e of entries.filter(e => e.scope === scope)) io.out(`$${e.name}\t${mask(e.value)}\t${e.created.slice(0, 10)}`)
+      if (!flags.global) for (const e of entries.filter(e => e.scope === GLOBAL && !entries.some(p => p.scope === scope && p.name === e.name)))
+        io.out(`$${e.name}\t${mask(e.value)}\t${e.created.slice(0, 10)}\t(global)`)
+      return 0
+    }
+    case 'rm': {
+      if (args.length !== 1) throw new Error('usage: veilpipe secret rm NAME [--global]')
+      const name = checkName(args[0]!.replace(/^\$/, ''))
+      if (!store.rm(scope, name)) {
+        io.err(`$${name} is not stored for ${shown(scope)}`)
+        return 1
+      }
+      io.out(`removed $${name} from ${shown(scope)}`)
+      return 0
+    }
+    case 'move': {
+      if (args.length !== 2) throw new Error('usage: veilpipe secret move OLD_FOLDER NEW_FOLDER')
+      const n = store.move(resolve(args[0]!), scopeOf(args[1]!))
+      io.out(`moved ${n} secret(s) to ${scopeOf(args[1]!)}`)
+      return 0
+    }
+    // For the mod only (it runs these itself; the hook denies them in commands the model writes).
+    // _load DIR: {scope, entries: [[value, name], ...]} for what DIR's project resolves.
+    case '_load': {
+      const sc = scopeOf(args[0] ?? process.cwd())
+      io.out(JSON.stringify({ scope: sc, entries: store.exists() ? store.visible(sc).map(e => [e.value, e.name]) : [] }))
+      return 0
+    }
+    // _save SCOPE NAME, value on stdin: saved | first | exists | conflict.
+    case '_save': {
+      if (args.length !== 2) throw new Error('usage: _save SCOPE NAME (value on stdin)')
+      io.out(store.put(args[0]!, args[1]!, readSecret(io)))
+      return 0
+    }
+    // _fill SCOPE NAME...: shell code that exports each value, read by the prefix the hook adds; exit 1 if one is missing.
+    case '_fill': {
+      const [sc, ...names] = args
+      const vis = store.visible(sc!)
+      const missing = names.filter(n => !vis.some(e => e.name === n))
+      if (missing.length) {
+        io.err(`veilpipe: ${missing.map(n => `$${n}`).join(', ')} not in the store for ${shown(sc!)}`)
+        return 1
+      }
+      for (const n of names) io.out(`export ${checkName(n)}=${shq(vis.find(e => e.name === n)!.value)}`)
+      return 0
+    }
+    default:
+      throw new Error('usage: veilpipe secret add|ls|rm|move (see veilpipe help)')
+  }
+}
+
 function scrubFileCmd(pos: string[], io: Out): number {
   const path = pos[0]
   if (!path) { io.err('usage: veilpipe scrub-file PATH  (known values as JSON on stdin)'); return 2 }
@@ -744,7 +903,8 @@ function scrubFileCmd(pos: string[], io: Out): number {
 export function main(argv: string[], io: Out = { out: s => console.log(s), err: s => console.error(s) }): number {
   const [cmd, ...rest] = argv
   try {
-    const { pos, flags, multi } = parse(rest)
+    // exec takes its command whole, never as flags.
+    const { pos, flags, multi } = cmd === 'exec' ? { pos: rest, flags: {} as Flags, multi: {} } : parse(rest, cmd === 'secret' ? ['replace'] : [])
     switch (cmd) {
       case 'scan':
         return scanCmd(pos, flags, io)
@@ -766,6 +926,10 @@ export function main(argv: string[], io: Out = { out: s => console.log(s), err: 
         return scrubFileCmd(pos, io)
       case 'doctor':
         return doctorCmd(flags, io)
+      case 'secret':
+        return secretCmd(pos, flags, io)
+      case 'exec':
+        return execCmd(pos, io)
       case undefined:
       case 'help':
       case '--help':

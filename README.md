@@ -3,7 +3,9 @@
 Veilpipe is a Claude Code mod (Claude Code 2.1.287 or newer). Secrets in what you type, what tools return and files
 you attach are replaced with names like `$STRIPE_KEY` before the model sees them: the model never sees the value. After
 each turn it also scrubs the values it replaced from that session's transcript and from `history.jsonl`; see Limits for
-what that disk scrub does not cover. It runs entirely on your machine: the mod makes no network calls of its own.
+what that disk scrub does not cover. Caught values go into veilpipe's own secret store, so a command that uses
+`$STRIPE_KEY` gets the value, in this session or a later one, without the model ever seeing it. It runs entirely on your
+machine: the mod makes no network calls of its own.
 
 ## Install (Node 22.18+; nothing to npm install)
 
@@ -23,6 +25,35 @@ To try it in one session only, skip `veilpipe install` and run `claude --plugin-
 2. `veilpipe audit`: read-only. Lists transcripts and prompt history that already hold secrets, by file, rule and
    count. It never prints a value. `veilpipe audit --fix` rewrites them; read the report first.
 3. `veilpipe scan "<text>"`: shows what the model would see.
+
+## Its own secret store
+
+When veilpipe catches a value, it saves it under its `$NAME` in a local, encrypted store, scoped to the project (the
+nearest git root, else the folder). A Bash command the model writes with `$STRIPE_KEY` then gets the value filled in
+when it runs, in this session or a new one; the model, the command text and the transcript only ever hold the name.
+Output that prints a stored value shows `$NAME` instead.
+
+- **The store:** one AES-256-GCM file, `~/.config/veilpipe/store/secrets.enc` (mode 600). Its key is in the macOS
+  Keychain (`veilpipe-store`), or in a mode-600 key file next to it on Linux. Nothing is synced between machines.
+- **Two values, one name** (a staging and a prod `DB_PASSWORD`): both are kept, as `$DB_PASSWORD` and `$DB_PASSWORD_2`,
+  and veilpipe tells the model which is which. The same value seen again keeps its name. Nothing is overwritten.
+- **Two projects, one name:** each project folder has its own `$STRIPE_KEY`. `--global` adds a fallback for every project.
+- **You manage it** (values come from stdin or a hidden prompt, never the command line):
+
+```sh
+veilpipe secret ls                    # names, lengths and dates for this project; never values
+veilpipe secret add STRIPE_KEY        # add one yourself (--replace to change it, --global for every project)
+veilpipe secret rm STRIPE_KEY
+veilpipe secret move ~/old/app ~/new/app    # a project folder was moved or renamed
+veilpipe exec 'npm run deploy'        # run a command with the stored names it uses filled in, output scrubbed
+```
+
+- **Opt out:** `"store": { "auto": false }` in a patterns file (or `VEILPIPE_NO_STORE=1`); then nothing is saved and
+  veilpipe tells the model plainly that commands can't use the value. Emails are never saved (`"skip"` changes the list).
+- **Agent skill:** `veilpipe-secrets` comes with it and tells the model to write `$NAME` in commands and never ask for,
+  print or slice a value. Commands that read the store or the Keychain directly are refused.
+- `veilpipe doctor` checks the store (key present, files private, no project folder gone missing);
+  `veilpipe doctor --canary` stores a fake value, has a real session use it in a command, and removes it.
 
 ## Your own rules
 
@@ -73,6 +104,10 @@ Regex finds shapes, not meaning. A secret inside an unbroken base64 run over 4 K
 text stays in the transcript or `history.jsonl` for the seconds of a turn. Files over 4 MB are scrubbed by a separate
 `veilpipe` process; if another session keeps writing to the file meanwhile, that scrub waits for the next turn. Mods
 are not sandboxed: read the code before you install it.
+
+The store widens what one bad command can reach: a prompt-injected command in a project can use every value stored for
+that project (and the global ones), not just what you pasted in that session. Output that prints a value is still
+replaced, but a value a command sends over the network is out of veilpipe's sight. Turn auto-save off where that matters.
 
 Questions and reports: io@deemwar.com
 

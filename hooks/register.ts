@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 
-import { compile, deepMap, merge, note, onMatchArgv, placeholderGuard, redact, scrubFile, scrubFragments, scrubJsonl, sliceGuard } from './core'
+import { compile, deepMap, merge, note, onMatchArgv, placeholderGuard, redact, referencedNames, scrubFile, scrubFragments, scrubJsonl, sliceGuard, storeReadGuard, storeWants } from './core'
 import type { Compiled, Found, PatternsFile } from './core'
 
 // Tool output bigger than this is not scanned in time; it is withheld instead.
@@ -16,6 +16,13 @@ const S = {
   broken: undefined as string | undefined,
   home: '',
   replaced: 0,
+  // The secret store: this project's scope, and the names it holds (a Bash command using one gets it filled in).
+  scope: undefined as string | undefined,
+  stored: new Set<string>(),
+  // Values loaded from the store (value -> name) and the names already explained to the model this session.
+  seeded: new Map<string, string>(),
+  announced: new Set<string>(),
+  noticed: false,
 }
 
 async function readPatterns($: EngineInterface, path: string): Promise<PatternsFile | undefined> {
@@ -51,6 +58,76 @@ async function load($: EngineInterface) {
   } catch (err) {
     S.broken = (err as Error).message
   }
+  await loadStore($)
+}
+
+const cli = ($: EngineInterface) => `${$.plugin.root}/bin/veilpipe`
+
+// This project's stored values seed `known`, so a value stored before keeps its name here and a new value gets the
+// next free one (the name the store will take). Without the store, redaction works exactly as before.
+async function loadStore($: EngineInterface) {
+  S.scope = undefined
+  S.stored.clear()
+  S.seeded.clear()
+  if (S.file.store?.auto === false || (await $.env.get('VEILPIPE_NO_STORE'))) return
+  try {
+    const r = await $.process.run([cli($), 'secret', '_load', await $.session.cwd()], { timeoutMs: 15_000 })
+    if (r.exitCode !== 0) throw new Error(`exit ${r.exitCode}`)
+    const { scope, entries } = JSON.parse(r.stdout) as { scope: string; entries: [string, string][] }
+    S.scope = scope
+    for (const [value, name] of entries) {
+      if (!known.has(value)) known.set(value, name)
+      S.seeded.set(value, name)
+      S.stored.add(name)
+    }
+  } catch (err) {
+    $.ui.log(`veilpipe: secret store not loaded (${(err as Error).message}); values are replaced but not saved`, { to: 'debug' })
+  }
+}
+
+// Saves newly caught values under the names the model is about to see. Never throws: a failed save only means the
+// value is not fillable, which the note then says.
+async function autoSave($: EngineInterface, fresh: Found[]) {
+  if (!S.scope) return
+  for (const f of fresh) {
+    if (!storeWants(S.file, f.name) || S.stored.has(f.name)) continue
+    try {
+      const r = await $.process.run([cli($), 'secret', '_save', S.scope, f.name], { stdin: f.value, timeoutMs: 15_000 })
+      const how = r.stdout.trim()
+      if (r.exitCode === 0 && (how === 'saved' || how === 'first' || how === 'exists')) S.stored.add(f.name)
+      else $.ui.log(`veilpipe: $${f.name} not saved (${how || `exit ${r.exitCode}`})`, { to: 'debug' })
+      if (how === 'first' && !S.noticed) {
+        S.noticed = true
+        $.ui.toast(`veilpipe: saved $${f.name} to your local secret store for this project, so later commands can use it. See: veilpipe secret ls. Turn off: "store": { "auto": false } in patterns.json.`)
+      }
+    } catch {
+      $.ui.log(`veilpipe: $${f.name} not saved`, { to: 'debug' })
+    }
+  }
+}
+
+// A stored value is in `known` from the start, so it is never fresh; the first time one appears this session the
+// model still gets the note for its name.
+function seenStored(text: string): Found[] {
+  const out: Found[] = []
+  for (const [value, name] of S.seeded) if (!S.announced.has(name) && text.includes(value)) out.push({ name, value })
+  return out
+}
+function toAnnounce(fresh: Found[], text: string): Found[] {
+  const all = [...fresh, ...seenStored(text)]
+  for (const f of all) S.announced.add(f.name)
+  return all
+}
+
+const shq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`
+
+// A Bash command that uses stored names first fetches their values from the store, in the child process: the
+// value is never in the command text the model wrote, the transcript or the model's context. A failed fetch stops
+// the command (exit 97) rather than run it with an empty value.
+function withFill($: EngineInterface, command: string): string {
+  const names = referencedNames(command).filter(n => S.stored.has(n))
+  if (!S.scope || names.length === 0) return command
+  return `__vp=$(${shq(cli($))} secret _fill ${shq(S.scope)} ${names.join(' ')}) || exit 97; eval "$__vp"; unset __vp\n${command}`
 }
 
 function status($: EngineInterface) {
@@ -170,7 +247,9 @@ export const register: Register = on => {
     const r = redact(e.text, S.compiled, known)
     if (r.fresh.length === 0 && r.text === e.text) return next(e)
     sideEffects($, r.fresh)
-    const context = r.fresh.length > 0 ? [...(e.context ?? []), note(r.fresh)] : e.context
+    await autoSave($, r.fresh)
+    const tell = toAnnounce(r.fresh, e.text)
+    const context = tell.length > 0 ? [...(e.context ?? []), note(tell, S.stored)] : e.context
     return next({ ...e, text: r.text, ...(context ? { context } : {}) })
   }).catch(() => ({ drop: 'veilpipe failed while checking this prompt; it was not sent (fail closed).' }))
 
@@ -186,15 +265,19 @@ export const register: Register = on => {
     if (e.tool === 'Bash') {
       const why = sliceGuard(e.command, new Set(known.values()))
       if (why) return { deny: `veilpipe: this command ${why}, which would print part of a protected value. Use the variable whole.` }
+      const reads = storeReadGuard(e.command)
+      if (reads) return { deny: `veilpipe: this command ${reads}. Use $NAME in the command instead; veilpipe fills it in.` }
     }
-    const ran = await next(e)
+    const ran = await next(e.tool === 'Bash' && typeof e.command === 'string' ? { ...e, command: withFill($, e.command) } : e)
     // Pure from here: no I/O may sit between the raw result and what we return.
     if (ran.deny !== undefined) return ran
     if (size(ran.result) > MAX_SCAN_CHARS) return { result: 'veilpipe: output too large to scan for secrets; withheld.', isError: true } as typeof ran
     const r = redactResult(ran.result)
     if (!r.changed) return ran
     sideEffects($, r.fresh)
-    return { result: r.result, ...(ran.isError ? { isError: true } : {}), ...(r.fresh.length > 0 ? { context: [note(r.fresh)] } : {}) } as typeof ran
+    await autoSave($, r.fresh)
+    const tell = S.seeded.size ? toAnnounce(r.fresh, JSON.stringify(ran.result)) : r.fresh
+    return { result: r.result, ...(ran.isError ? { isError: true } : {}), ...(tell.length > 0 ? { context: [note(tell, S.stored)] } : {}) } as typeof ran
   }).catch(async ($, e, next) => {
     // Never run a tool whose check failed; if it already ran, hand back only a redacted result.
     if (!next.called) return { deny: 'veilpipe failed while checking this tool call; it was not run (fail closed).' } as any

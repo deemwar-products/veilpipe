@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import { createHash } from 'node:crypto'
 const createHashHex = (v: string) => createHash('sha256').update(v).digest('hex')
 
-import { compile, expandModifiers, maskBlobs, merge, placeholderGuard, redact, runTests, scan, scrubFile, scrubFragments, scrubJsonl, sliceGuard } from '../hooks/core.ts'
+import { compile, expandModifiers, maskBlobs, merge, note, placeholderGuard, redact, referencedNames, runTests, scan, scrubFile, scrubFragments, scrubJsonl, sliceGuard, storeReadGuard, storeWants } from '../hooks/core.ts'
 import { audit, doctor, fingerprint, main, mask, opencodeShim, opencodeTarget, scrubLargeFile, vaultFingerprints } from '../cli/veilpipe.ts'
 
 const DEFAULTS = JSON.parse(readFileSync(new URL('../patterns.json', import.meta.url), 'utf8'))
@@ -559,4 +559,205 @@ test('expandModifiers (Node 22 has no (?i:...) groups): case-insensitive parts b
   const re = (src: string, f = '') => { const x = expandModifiers(src, f); return new RegExp(x.source, x.flags) }
   assert.ok(re('key(?i:Token)').test('keyTOKEN') && !re('key(?i:Token)').test('KEYtoken'))
   assert.ok(re('x(?-i:AB)', 'i').test('XAB') && !re('x(?-i:AB)', 'i').test('xab'))
+})
+
+// Secret store (cli/secrets.ts). FAKE values only.
+import { GLOBAL, Store, scopeOf } from '../cli/secrets.ts'
+import { spawn as spawnS, spawnSync as spawnSyncS } from 'node:child_process'
+import { statSync as statSyncS } from 'node:fs'
+function storeFixture() {
+  const root = mkdtempSync(join(tmpdir(), 'vp-store-'))
+  const a = join(root, 'repo-a'), b = join(root, 'repo-b'), sub = join(a, 'src', 'deep')
+  mkdirSync(join(a, '.git'), { recursive: true }); mkdirSync(join(b, '.git'), { recursive: true }); mkdirSync(sub, { recursive: true })
+  return { root, a, b, sub, home: join(root, 'home'), store: new Store(join(root, 'home'), { VEILPIPE_STORE_BACKEND: 'file' }) }
+}
+
+test('secrets: scope is the nearest git root, else the folder itself', () => {
+  const f = storeFixture()
+  assert.equal(scopeOf(f.sub), scopeOf(f.a))
+  const loose = join(f.root, 'loose'); mkdirSync(loose)
+  assert.equal(scopeOf(loose), loose)
+  rmSync(f.root, { recursive: true })
+})
+
+test('secrets: the same NAME in two project folders resolves to two different values', () => {
+  const f = storeFixture()
+  f.store.add(scopeOf(f.a), 'STRIPE_KEY', 'sk_test_FAKEAAAAAAAAAAAAAAAAAAAA0001')
+  f.store.add(scopeOf(f.b), 'STRIPE_KEY', 'sk_test_FAKEBBBBBBBBBBBBBBBBBBBB0002')
+  assert.equal(f.store.lookup(scopeOf(f.a), 'STRIPE_KEY')?.value, 'sk_test_FAKEAAAAAAAAAAAAAAAAAAAA0001')
+  assert.equal(f.store.lookup(scopeOf(f.b), 'STRIPE_KEY')?.value, 'sk_test_FAKEBBBBBBBBBBBBBBBBBBBB0002')
+  rmSync(f.root, { recursive: true })
+})
+
+test('secrets: auto-save keeps both values of one name (NAME, NAME_2, NAME_3); the same value reuses its name', () => {
+  const f = storeFixture(), s = scopeOf(f.a)
+  assert.equal(f.store.save(s, 'DB_PASSWORD', 'FAKE-staging-pw-0001'), 'DB_PASSWORD')
+  assert.equal(f.store.save(s, 'DB_PASSWORD', 'FAKE-prod-pw-0002'), 'DB_PASSWORD_2')
+  assert.equal(f.store.save(s, 'DB_PASSWORD', 'FAKE-staging-pw-0001'), 'DB_PASSWORD')
+  assert.equal(f.store.save(s, 'DB_PASSWORD', 'FAKE-third-pw-0003'), 'DB_PASSWORD_3')
+  assert.equal(f.store.lookup(s, 'DB_PASSWORD')?.value, 'FAKE-staging-pw-0001')
+  assert.equal(f.store.lookup(s, 'DB_PASSWORD_2')?.value, 'FAKE-prod-pw-0002')
+  // Another project's scope is separate: the same value there starts at the base name.
+  assert.equal(f.store.save(scopeOf(f.b), 'DB_PASSWORD', 'FAKE-prod-pw-0002'), 'DB_PASSWORD')
+  rmSync(f.root, { recursive: true })
+})
+
+test('secrets: add refuses a taken name unless replace; lookup is project first, then global', () => {
+  const f = storeFixture(), s = scopeOf(f.a)
+  f.store.add(s, 'API_TOKEN', 'FAKE-token-0001')
+  assert.throws(() => f.store.add(s, 'API_TOKEN', 'FAKE-token-0002'), /already stored.*--replace/)
+  assert.equal(f.store.add(s, 'API_TOKEN', 'FAKE-token-0002', true), 'replaced')
+  f.store.add(GLOBAL, 'API_TOKEN', 'FAKE-global-0003'); f.store.add(GLOBAL, 'OTHER', 'FAKE-global-0004')
+  assert.equal(f.store.lookup(s, 'API_TOKEN')?.value, 'FAKE-token-0002')
+  assert.equal(f.store.lookup(s, 'OTHER')?.value, 'FAKE-global-0004')
+  assert.equal(f.store.lookup(scopeOf(f.b), 'API_TOKEN')?.value, 'FAKE-global-0003')
+  assert.throws(() => f.store.add(s, 'lower-case', 'FAKE-x-0005'), /not a name/)
+  rmSync(f.root, { recursive: true })
+})
+
+test('secrets: at rest the store holds no value in plain text, files are 0600, a wrong key is refused', () => {
+  const f = storeFixture()
+  f.store.add(scopeOf(f.a), 'STRIPE_KEY', 'sk_test_FAKEPLAINPLAINPLAIN0001')
+  const text = readFileSync(f.store.file, 'utf8')
+  assert.equal(text.includes('FAKEPLAIN'), false)
+  assert.equal(text.includes('STRIPE_KEY'), false) // names are inside the ciphertext too
+  for (const p of [f.store.file, join(f.store.dir, 'key')]) assert.equal(statSyncS(p).mode & 0o777, 0o600)
+  writeFileSync(join(f.store.dir, 'key'), `${'0'.repeat(64)}\n`)
+  assert.throws(() => f.store.read(), /could not be decrypted/)
+  rmSync(f.root, { recursive: true })
+})
+
+test('secrets: move follows a renamed project folder; orphans lists scopes whose folder is gone', () => {
+  const f = storeFixture(), old = scopeOf(f.a)
+  f.store.add(old, 'STRIPE_KEY', 'sk_test_FAKEMOVEMOVEMOVEMOVE0001')
+  const moved = join(f.root, 'repo-a-renamed')
+  spawnSyncS('mv', [f.a, moved])
+  assert.deepEqual(f.store.orphans(), [{ scope: old, count: 1 }])
+  assert.equal(f.store.move(old, scopeOf(moved)), 1)
+  assert.equal(f.store.lookup(scopeOf(moved), 'STRIPE_KEY')?.value, 'sk_test_FAKEMOVEMOVEMOVEMOVE0001')
+  assert.deepEqual(f.store.orphans(), [])
+  // A clash in the target scope is refused, nothing moves.
+  f.store.add(scopeOf(f.b), 'STRIPE_KEY', 'sk_test_FAKECLASHCLASHCLASH0002')
+  assert.throws(() => f.store.move(scopeOf(moved), scopeOf(f.b)), /already has \$STRIPE_KEY/)
+  rmSync(f.root, { recursive: true })
+})
+
+test('secrets: Keychain backend keeps the store key out of every argv (fake security binary)', () => {
+  const f = storeFixture(), bin = join(f.root, 'bin'), log = join(f.root, 'argv.log'), kc = join(f.root, 'keychain')
+  mkdirSync(bin)
+  // find-generic-password ... -w prints the saved key (exit 44 when none); -i reads 'add-generic-password ... -w KEY' from stdin.
+  writeFileSync(join(bin, 'security'), `#!/bin/sh\necho "$*" >> ${log}\ncase "$1" in\n  find-generic-password) [ -f ${kc} ] && cat ${kc} && exit 0; exit 44;;\n  -i) read -r line; echo "$line" | sed 's/.* -w //' > ${kc};;\nesac\n`, { mode: 0o755 })
+  const saved = process.env.PATH
+  process.env.PATH = `${bin}:${saved}`
+  try {
+    const store = new Store(f.home, { VEILPIPE_STORE_BACKEND: 'keychain' })
+    store.add(scopeOf(f.a), 'STRIPE_KEY', 'sk_test_FAKEKEYCHAINKEYCHAIN0001')
+    assert.equal(store.lookup(scopeOf(f.a), 'STRIPE_KEY')?.value, 'sk_test_FAKEKEYCHAINKEYCHAIN0001')
+    const key = readFileSync(kc, 'utf8').trim()
+    assert.match(key, /^[0-9a-f]{64}$/)
+    assert.equal(readFileSync(log, 'utf8').includes(key), false)
+    assert.equal(existsSync(join(store.dir, 'key')), false) // no key file next to the store
+  } finally {
+    process.env.PATH = saved
+  }
+  rmSync(f.root, { recursive: true })
+})
+
+test('secrets: two processes saving at once lose nothing (lock)', () => {
+  const f = storeFixture(), s = scopeOf(f.a)
+  const script = (tag: string) => `import { Store } from ${JSON.stringify(new URL('../cli/secrets.ts', import.meta.url).pathname)}; const st = new Store(${JSON.stringify(f.home)}, { VEILPIPE_STORE_BACKEND: 'file' }); for (let i = 0; i < 10; i++) st.save(${JSON.stringify(s)}, 'DB_PASSWORD', 'FAKE-${tag}-' + i)`
+  f.store.save(s, 'DB_PASSWORD', 'FAKE-first-0') // creates the key before the race
+  const kids = ['x', 'y'].map(t => spawnS(process.execPath, ['--no-warnings', '--input-type=module', '-e', script(t)]))
+  return Promise.all(kids.map(k => new Promise(r => k.on('exit', r)))).then(codes => {
+    assert.deepEqual(codes, [0, 0])
+    const names = f.store.read().filter(e => e.scope === s).map(e => e.name)
+    assert.equal(names.length, 21)
+    assert.equal(new Set(names).size, 21)
+    rmSync(f.root, { recursive: true })
+  })
+})
+
+test('cli: secret add reads the value from input, never argv; ls shows names and lengths, never values', () => {
+  const f = storeFixture()
+  const saved = process.cwd()
+  process.chdir(f.a)
+  try {
+    const cli = (argv: string[], value?: string) => {
+      const out: string[] = [], err: string[] = []
+      const code = main(argv, { out: s => out.push(s), err: s => err.push(s), ...(value !== undefined ? { input: () => value } : {}) })
+      return { code, out: out.join('\n'), err: err.join('\n') }
+    }
+    process.env.VEILPIPE_HOME = f.home; process.env.VEILPIPE_STORE_BACKEND = 'file'
+    assert.equal(cli(['secret', 'add', 'STRIPE_KEY', 'sk_test_FAKEONARGVONARGV0001']).code, 2)
+    assert.equal(cli(['secret', 'add', 'STRIPE_KEY'], 'sk_test_FAKECLICLICLICLI0001').code, 0)
+    assert.equal(cli(['secret', 'add', 'STRIPE_KEY', '--replace'], 'sk_test_FAKECLICLICLICLI0002').code, 0)
+    const ls = cli(['secret', 'ls'])
+    assert.match(ls.out, /\$STRIPE_KEY\t28 chars\t\d{4}-\d\d-\d\d/)
+    assert.equal(ls.out.includes('FAKECLI'), false)
+    const all = cli(['secret', 'ls', '--all'])
+    assert.equal(all.out, `${scopeOf(f.a)}\t$STRIPE_KEY`)
+    assert.equal(cli(['secret', 'rm', 'STRIPE_KEY']).code, 0)
+    assert.equal(cli(['secret', 'rm', 'STRIPE_KEY']).code, 1)
+  } finally {
+    process.chdir(saved); delete process.env.VEILPIPE_HOME; delete process.env.VEILPIPE_STORE_BACKEND
+  }
+  rmSync(f.root, { recursive: true })
+})
+
+test('store: auto-save wants every secret name, skips EMAIL (and EMAIL_2), and honours auto:false and skip', () => {
+  assert.equal(storeWants({ patterns: [] }, 'STRIPE_KEY'), true)
+  assert.equal(storeWants({ patterns: [] }, 'DB_PASSWORD_2'), true)
+  assert.equal(storeWants({ patterns: [] }, 'EMAIL'), false)
+  assert.equal(storeWants({ patterns: [] }, 'EMAIL_2'), false)
+  assert.equal(storeWants({ patterns: [], store: { auto: false } }, 'STRIPE_KEY'), false)
+  assert.equal(storeWants({ patterns: [], store: { skip: ['JWT'] } }, 'JWT'), false)
+  assert.equal(storeWants({ patterns: [], store: { skip: ['JWT'] } }, 'EMAIL'), true) // skip replaces the default list
+  // merge keeps the last file's store settings.
+  assert.deepEqual(merge({ patterns: [], store: { skip: ['JWT'] } }, { patterns: [], store: { auto: false } }).store, { skip: ['JWT'], auto: false })
+})
+
+test('store: referencedNames finds $NAME and ${NAME}; storeReadGuard stops direct reads of the store', () => {
+  assert.deepEqual(referencedNames('curl -H "Bearer $STRIPE_KEY" ${DB_PASSWORD}x $lower $STRIPE_KEY'), ['STRIPE_KEY', 'DB_PASSWORD'])
+  assert.match(storeReadGuard('veilpipe secret _fill /x STRIPE_KEY')!, /internal store/)
+  assert.match(storeReadGuard('security find-generic-password -s veilpipe-store -w')!, /Keychain/)
+  assert.match(storeReadGuard('cat ~/.config/veilpipe/store/key')!, /store files/)
+  assert.match(storeReadGuard('xxd ~/.config/veilpipe/store/secrets.enc')!, /store files/)
+  assert.equal(storeReadGuard('veilpipe secret ls'), undefined)
+  assert.equal(storeReadGuard('curl -H "Bearer $STRIPE_KEY" https://api.example.com'), undefined)
+})
+
+test('store: the note promises a fill only for stored names, and says plainly when a name cannot be used', () => {
+  const both = note([{ name: 'STRIPE_KEY', value: 'x' }, { name: 'EMAIL', value: 'y' }], new Set(['STRIPE_KEY']))
+  assert.match(both, /\$STRIPE_KEY is in the user's local secret store: .*filled in when the command runs/)
+  assert.match(both, /\$EMAIL is not available to commands; .*veilpipe secret add EMAIL/)
+  const none = note([{ name: 'STRIPE_KEY', value: 'x' }])
+  assert.equal(none.includes('filled in'), false)
+})
+
+test('cli: exec fills stored names into the child and prints $NAME instead of any stored value', () => {
+  const f = storeFixture()
+  f.store.add(scopeOf(f.a), 'STRIPE_KEY', 'sk_test_FAKEEXECEXECEXECEXEC0001')
+  const r = spawnSyncS(process.execPath, ['--no-warnings', new URL('../cli/veilpipe.ts', import.meta.url).pathname, 'exec', 'printf %s "$STRIPE_KEY" | wc -c; echo "k=$STRIPE_KEY" >&2; exit 3'],
+    { cwd: f.a, env: { ...process.env, VEILPIPE_HOME: f.home, VEILPIPE_STORE_BACKEND: 'file' }, encoding: 'utf8' })
+  assert.equal(r.stdout.trim(), '32')
+  assert.equal(r.stderr.trim(), 'k=$STRIPE_KEY')
+  assert.equal(r.status, 3)
+  rmSync(f.root, { recursive: true })
+})
+
+test('doctor: store check opens the store, flags files others can read, and warns about a moved project folder', () => {
+  const f = storeFixture()
+  f.store.add(scopeOf(f.a), 'STRIPE_KEY', 'sk_test_FAKEDOCTORDOCTORDOC0001')
+  const env = { ...process.env, VEILPIPE_HOME: f.home, VEILPIPE_STORE_BACKEND: 'file' }
+  const fakeRun = () => ({ status: 1, stdout: '' })
+  const store = (c: { name: string; level: string; detail: string }[]) => c.filter(x => x.name.startsWith('store'))
+  assert.deepEqual(store(doctor({ run: fakeRun, env })).map(c => c.level), ['ok'])
+  spawnSyncS('chmod', ['644', f.store.file])
+  assert.match(store(doctor({ run: fakeRun, env }))[0]!.detail, /readable by others: chmod 600/)
+  spawnSyncS('chmod', ['600', f.store.file])
+  rmSync(f.a, { recursive: true })
+  const moved = store(doctor({ run: fakeRun, env })).find(c => c.name === 'store: moved?')!
+  assert.equal(moved.level, 'warn')
+  assert.match(moved.detail, /veilpipe secret move/)
+  rmSync(f.root, { recursive: true })
 })
