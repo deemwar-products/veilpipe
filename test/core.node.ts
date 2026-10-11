@@ -761,3 +761,22 @@ test('doctor: store check opens the store, flags files others can read, and warn
   assert.match(moved.detail, /veilpipe secret move/)
   rmSync(f.root, { recursive: true })
 })
+
+test('cli: install --project is refused (it did not protect claude -p); uninstall --project still removes an old link', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vp-proj-'))
+  const saved = process.cwd()
+  process.chdir(dir)
+  try {
+    const r = run(['install', '--project'])
+    assert.equal(r.code, 2)
+    assert.match(r.err, /does not protect every session.*veilpipe install/)
+    assert.equal(existsSync(join(dir, '.claude', 'skills', 'veilpipe')), false)
+    mkdirSync(join(dir, '.claude', 'skills'), { recursive: true })
+    symlinkSync(dir, join(dir, '.claude', 'skills', 'veilpipe'))
+    assert.equal(run(['uninstall', '--project']).code, 0)
+    assert.equal(existsSync(join(dir, '.claude', 'skills', 'veilpipe')), false)
+  } finally {
+    process.chdir(saved)
+  }
+  rmSync(dir, { recursive: true })
+})

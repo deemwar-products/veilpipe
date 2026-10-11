@@ -217,6 +217,10 @@ function installOpencode(io: Out, uninstall: boolean): number {
 
 function installCmd(flags: Flags, io: Out, uninstall = false): number {
   if (flags.opencode) return installOpencode(io, uninstall)
+  // 10-11: a link in <project>/.claude/skills did not load the mod in claude -p sessions (the model saw a raw fake key),
+  // so it is not offered; uninstall --project still removes an old link.
+  if (flags.project && !uninstall)
+    throw new Error('install --project does not protect every session (claude -p ignored it in testing); use veilpipe install (all sessions) or claude --plugin-dir ' + ROOT + ' (one session)')
   const target = installTarget(flags)
   const present = lexists(target)
   if (uninstall) {
@@ -746,8 +750,8 @@ const HELP = `veilpipe: rewrite secrets to $NAME before Claude sees them.
   veilpipe add NAME REGEX [--group N] [--name-group N] [--flags i] [--replace T] [--hit EX] [--miss EX]
   veilpipe rm NAME                  remove (or switch off a shipped) pattern
   veilpipe list                     the merged patterns: shipped, ~/.config/veilpipe, ./.veilpipe
-  veilpipe install [--project | --dir PATH]   load the mod in every Claude Code session
-  veilpipe uninstall [--project | --dir PATH]
+  veilpipe install [--dir PATH]     load the mod in every Claude Code session
+  veilpipe uninstall [--dir PATH]   (--project removes a link made by an older version)
   veilpipe install --opencode / uninstall --opencode   the same protection for opencode (global plugin)
   veilpipe audit --fingerprints [--sec]   one row per distinct secret: sha256 prefix, rules, files; --sec names the vault entry it matches
   veilpipe audit [--fix] [--days N] [--include-email] [--recent MIN] [--json]
