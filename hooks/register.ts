@@ -125,7 +125,14 @@ async function configDir($: EngineInterface): Promise<string> {
 async function scrubDisk($: EngineInterface) {
   if (known.size === 0) return
   const transcript = await transcriptPath($)
-  if (transcript) await scrubOne($, transcript, 'the transcript')
+  if (transcript) {
+    await scrubOne($, transcript, 'the transcript')
+    // This session's subagents write their own transcripts beside it: <session>/subagents/agent-*.jsonl.
+    const subs = `${transcript.slice(0, -'.jsonl'.length)}/subagents`
+    if (await $.fs.exists(subs))
+      for (const e of await $.fs.list(subs))
+        if (e.kind === 'file' && e.name.endsWith('.jsonl')) await scrubOne($, `${subs}/${e.name}`, `subagent transcript ${e.name}`)
+  }
   const history = `${await configDir($)}/history.jsonl`
   if (await $.fs.exists(history)) await scrubOne($, history, 'history.jsonl')
 }

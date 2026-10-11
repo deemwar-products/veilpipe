@@ -65,8 +65,8 @@ opencode limits:
 ## Limits
 
 The promise is about the model, not your disk. The disk scrub covers only the values veilpipe replaced, in that
-session's own transcript and `history.jsonl`. It does not touch subagent transcripts, sessions that ran without veilpipe,
-or text the model wrote itself (for example a dev password it made up for a new `.env`; it never saw yours). Run
+session's own transcript, its subagents' transcripts and `history.jsonl`. It does not touch sessions that ran without
+veilpipe, or text the model wrote itself (for example a dev password it made up for a new `.env`; it never saw yours). Run
 `veilpipe audit` to see what is on disk.
 
 Regex finds shapes, not meaning. A secret inside an unbroken base64 run over 4 KB (an image) is not scanned. The raw
