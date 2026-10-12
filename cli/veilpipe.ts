@@ -215,6 +215,14 @@ function installOpencode(io: Out, uninstall: boolean): number {
   return 0
 }
 
+// Uninstall keeps the secret store, so a reinstall still has the saved keys; say so, or it reads as gone.
+function storeLeft(io: Out) {
+  const dir = join(home(), 'store')
+  if (!existsSync(dir)) return
+  io.out(`veilpipe: your saved secrets stay in ${dir}, so a reinstall still has them. To delete them too: rm -rf ${home()}` +
+    (backend() === 'keychain' ? ', then security delete-generic-password -s veilpipe-store (its key in the Keychain)' : ''))
+}
+
 function installCmd(flags: Flags, io: Out, uninstall = false): number {
   if (flags.opencode) return installOpencode(io, uninstall)
   // 10-11: a link in <project>/.claude/skills did not load the mod in claude -p sessions (the model saw a raw fake key),
@@ -228,6 +236,7 @@ function installCmd(flags: Flags, io: Out, uninstall = false): number {
     if (!lstatSync(target).isSymbolicLink()) throw new Error(`${target} is not a veilpipe link; remove it yourself`)
     rmSync(target)
     io.out(`veilpipe: removed ${target}`)
+    storeLeft(io)
     return 0
   }
   if (present) {

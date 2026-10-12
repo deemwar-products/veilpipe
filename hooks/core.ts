@@ -155,12 +155,49 @@ export function referencedNames(command: string): string[] {
 
 // A command the model wrote that reads the store directly (the mod's own fill prefix is added after this check).
 // Best effort: a disguised read still prints only $NAME, because every stored value is redacted from tool output.
+// Prose is not a read: a quoted argument with spaces in it (a commit message, a reply that quotes the command) and a
+// heredoc body are skipped, unless the command hands text to a shell or interpreter (sh -c, eval, ssh, python...).
 export function storeReadGuard(command: string): string | undefined {
-  if (/\bsecret\s+_(load|fill|save)\b/.test(command)) return 'runs veilpipe\'s internal store commands'
-  if (/\bsecurity\b[^\n]*\bfind-generic-password\b/.test(command)) return 'reads the Keychain'
-  if (/secrets\.enc|veilpipe\/store\/key/.test(command)) return 'reads the secret store files'
+  const code = INTERPRETER.test(withoutProse(command)) ? command : withoutProse(command)
+  if (/\bsecret\s+_(load|fill|save)\b/.test(code)) return 'runs veilpipe\'s internal store commands'
+  if (/\bsecurity\b[^\n]*\bfind-generic-password\b/.test(code)) return 'reads the Keychain'
+  if (/secrets\.enc|veilpipe\/store\/key/.test(code)) return 'reads the secret store files'
   return undefined
 }
+
+const INTERPRETER = /(^|[^\w.-])(sh|bash|zsh|dash|ksh|fish|eval|exec|source|ssh|su|osascript|xargs|tmux|screen|script|expect|parallel|python3?|node|perl|ruby|deno|bun|php|lua|tclsh|awk|gawk)($|[^\w.-])/
+
+// The command with prose blanked: quoted strings holding whitespace (their $(...) and `...` kept, since those run) and
+// heredoc bodies. A quoted word without spaces (a path) stays.
+export function withoutProse(command: string): string {
+  let out = ''
+  for (let i = 0; i < command.length;) {
+    const c = command[i]!
+    if (c === '\\') { out += command.slice(i, i + 2); i += 2; continue }
+    const doc = c === '<' && /^<<-?\s*(['"]?)([A-Za-z_][\w-]*)\1/.exec(command.slice(i))
+    if (doc) {
+      const eol = command.indexOf('\n', i)
+      if (eol < 0) { out += command.slice(i); break }
+      const end = new RegExp(`^\\t*${doc[2]}$`, 'm')
+      const body = command.slice(eol + 1)
+      const m = end.exec(body)
+      const len = m ? m.index : body.length
+      out += command.slice(i, eol + 1) + (doc[1] ? '' : substitutions(body.slice(0, len)))
+      i = eol + 1 + len
+      continue
+    }
+    if (c !== "'" && c !== '"') { out += c; i++; continue }
+    let j = i + 1
+    while (j < command.length && command[j] !== c) j += c === '"' && command[j] === '\\' ? 2 : 1
+    const inner = command.slice(i + 1, j)
+    const literal = c === '"' ? inner.replace(/\$\([^)]*\)|`[^`]*`/g, '') : inner
+    out += /\s/.test(literal) ? (c === '"' ? substitutions(inner) : '') : command.slice(i, j + 1)
+    i = j + 1
+  }
+  return out
+}
+
+const substitutions = (text: string) => ' ' + [...text.matchAll(/\$\([^)]*\)|`[^`]*`/g)].map(m => m[0]).join(' ') + ' '
 
 type CompiledAllow = { regexes: RegExp[]; stopwords: string[]; target: 'secret' | 'match' | 'line' }
 

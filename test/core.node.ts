@@ -785,6 +785,16 @@ test('store: referencedNames finds $NAME and ${NAME}; storeReadGuard stops direc
   assert.match(storeReadGuard('xxd ~/.config/veilpipe/store/secrets.enc')!, /store files/)
   assert.equal(storeReadGuard('veilpipe secret ls'), undefined)
   assert.equal(storeReadGuard('curl -H "Bearer $STRIPE_KEY" https://api.example.com'), undefined)
+  // Prose that only quotes a read is not one (10-12: the guard refused a reply that quoted the Keychain command).
+  const K = 'security find-generic-password -s veilpipe-store'
+  assert.equal(storeReadGuard(`chat reply r-1 "I can't run ${K}: it is blocked"`), undefined)
+  assert.equal(storeReadGuard("git commit -m 'docs: delete ~/.config/veilpipe/store/secrets.enc too'"), undefined)
+  assert.equal(storeReadGuard(`cat > notes.md <<'EOF'\nrun ${K}\nEOF\ngit add notes.md`), undefined)
+  // ...but quoted text that runs still counts: a shell, a substitution, a quoted path.
+  for (const c of [`sh -c "${K} -w"`, `bash -lc '${K} -w'`, `ssh mac '${K} -w'`, `veilpipe exec '${K} -w'`, `echo "k: $(${K} -w)"`,
+    'echo "k: `' + K + ' -w`"', `sh <<'EOF'\n${K} -w\nEOF`, `cat <<EOF\n$(${K} -w)\nEOF`])
+    assert.match(storeReadGuard(c)!, /Keychain/, c)
+  assert.match(storeReadGuard('cat "$HOME/.config/veilpipe/store/secrets.enc"')!, /store files/)
 })
 
 test('store: the note promises a fill only for stored names, and says plainly when a name cannot be used', () => {
@@ -845,4 +855,20 @@ test('cli: install --project is refused (it did not protect claude -p); uninstal
     process.chdir(saved)
   }
   rmSync(dir, { recursive: true })
+})
+
+test('cli: uninstall says the secret store stays, and how to delete it', () => {
+  const config = mkdtempSync(join(tmpdir(), 'veilpipe-cfg-'))
+  const env = { HOME: config, CLAUDE_CONFIG_DIR: config, VEILPIPE_HOME: join(config, 'cm') }
+  assert.equal(run(['install'], env).code, 0)
+  const none = run(['uninstall'], env)
+  assert.doesNotMatch(none.out, /saved secrets/)
+  mkdirSync(join(config, 'cm', 'store'), { recursive: true })
+  assert.equal(run(['install'], env).code, 0)
+  const file = run(['uninstall'], { ...env, VEILPIPE_STORE_BACKEND: 'file' })
+  assert.match(file.out, /saved secrets stay in .*cm\/store.*rm -rf .*cm$/m)
+  assert.doesNotMatch(file.out, /Keychain/)
+  assert.equal(run(['install'], env).code, 0)
+  assert.match(run(['uninstall'], { ...env, VEILPIPE_STORE_BACKEND: 'keychain' }).out, /security delete-generic-password -s veilpipe-store/)
+  rmSync(config, { recursive: true })
 })
