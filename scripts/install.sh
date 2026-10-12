@@ -8,7 +8,7 @@
 set -eu
 
 main() {
-  REF=${VEILPIPE_REF:-v0.2.3}
+  REF=${VEILPIPE_REF:-v0.2.4}
   DIR=${VEILPIPE_DIR:-$HOME/.veilpipe}
   BIN=${VEILPIPE_BIN:-$HOME/.local/bin}
   REPO=${VEILPIPE_REPO:-https://github.com/deemwar-products/veilpipe}
@@ -26,7 +26,11 @@ main() {
     fail "$DIR exists and is not a veilpipe clone; move it or set VEILPIPE_DIR"
   else
     say "cloning $REF into $DIR"
-    git -c advice.detachedHead=false clone -q --depth 1 --branch "$REF" "$REPO" "$DIR"
+    # Not `clone --depth 1 --branch <tag>`: git 2.50+ warns "refs/tags/<tag> ... is not a commit!" for an annotated tag.
+    git init -q "$DIR"
+    git -C "$DIR" remote add origin "$REPO"
+    git -C "$DIR" fetch -q --depth 1 origin "refs/tags/$REF:refs/tags/$REF"
+    git -C "$DIR" -c advice.detachedHead=false checkout -q "$REF"
   fi
 
   mkdir -p "$BIN"
