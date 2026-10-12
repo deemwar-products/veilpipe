@@ -124,18 +124,28 @@ test('auto-save: a README read stores nothing; a .env read and a paste do', asyn
   // Fake to a reader, but with none of the markers looksFake skips, so only the source rule can stop it.
   const REAL_LOOKING = 'sk_test_NOTREALNOTREALNOTREALNOTREAL1'
   let out = ''
+  const toasts: string[] = []
+  on('ui.toast', ($: any, e: any) => { toasts.push(String(e.message ?? e.text ?? JSON.stringify(e))); return { value: undefined } })
   on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: out, stderr: '', interrupted: false } }) as any)
   on('prompt.submit', ($, e) => ({ text: e.text }))
   await started($)
   out = `Set STRIPE_KEY=${FAKE_STRIPE} or STRIPE_KEY=${REAL_LOOKING}`
-  await $.tool.call({ tool: 'Bash', command: 'head README.md' } as any)
+  const readme = JSON.stringify(await $.tool.call({ tool: 'Bash', command: 'head README.md' } as any))
   expect(saves).toEqual([])
+  // v0.2.3: values that will not be saved stay off the free base name, so the project's real key can take it.
+  expect(readme).toContain('$STRIPE_KEY_2')
+  expect(readme).not.toMatch(/\$STRIPE_KEY(?![_0-9])/)
   out = `STRIPE=${FAKE_STRIPE}`
   await $.tool.call({ tool: 'Bash', command: 'cat .env' } as any)
   expect(saves).toEqual([]) // a .env value that says FAKE is not saved either
-  out = `STRIPE=${REAL_LOOKING}`
+  expect(toasts.filter(t => t.includes('looks like a placeholder'))).toHaveLength(1)
+  out = `STRIPE=${REAL_LOOKING.replace(/1$/, '2')}`
   await $.tool.call({ tool: 'Bash', command: 'cat .env.local' } as any)
-  expect(saves).toEqual(['STRIPE_KEY_2'])
+  expect(saves).toEqual(['STRIPE_KEY'])
+  // A value first seen in the README keeps the name the model already knows it by.
+  out = `STRIPE_OLD=${REAL_LOOKING}`
+  await $.tool.call({ tool: 'Bash', command: 'cat .env' } as any)
+  expect(saves).toEqual(['STRIPE_KEY', 'STRIPE_KEY_3'])
   await $.prompt.submit({ text: `db is ${FAKE_DB}`, wait: false, origin: user } as any)
-  expect(saves).toEqual(['STRIPE_KEY_2', 'DB_PASSWORD'])
+  expect(saves).toEqual(['STRIPE_KEY', 'STRIPE_KEY_3', 'DB_PASSWORD'])
 })

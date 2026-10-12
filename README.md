@@ -33,7 +33,8 @@ command that only reads `.env`, `.env.local`, `.env.production` and the like, su
 it saves it under its `$NAME` in a local, encrypted store, scoped to the project (the nearest git root, else the
 folder). Values in other files and command output (a README, docs, source code, `git log`), or from a command that
 reads anything besides those files, are still replaced but never saved, and neither is a value that says it is not
-real (FAKE, EXAMPLE, DEMO, `your_key`, `xxxxxxxx`); add one yourself with `veilpipe secret add NAME`. A Bash command
+real (FAKE, EXAMPLE, DEMO, `your_key`, `xxxxxxxx` with nothing random beside them; veilpipe says when it skips one
+from `.env`); add one yourself with `veilpipe secret add NAME`. A Bash command
 the model writes with `$STRIPE_KEY` then gets the value filled in when it runs, in this session or a new one; the
 model, the command text and the transcript only ever hold the name. Output that prints a stored value shows `$NAME`
 instead.
@@ -42,6 +43,8 @@ instead.
   Keychain (`veilpipe-store`), or in a mode-600 key file next to it on Linux. Nothing is synced between machines.
 - **Two values, one name** (a staging and a prod `DB_PASSWORD`): both are kept, as `$DB_PASSWORD` and `$DB_PASSWORD_2`,
   and veilpipe tells the model which is which. The same value seen again keeps its name. Nothing is overwritten.
+  A value veilpipe will not save (a README's example key) takes the next number, so `$STRIPE_KEY` stays free for
+  your real key.
 - **Two projects, one name:** each project folder has its own `$STRIPE_KEY`. `--global` adds a fallback for every project.
 - **You manage it** (values come from stdin or a hidden prompt, never the command line):
 

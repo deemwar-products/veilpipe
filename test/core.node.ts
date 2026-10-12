@@ -737,6 +737,19 @@ test('skills/veilpipe-secrets/SKILL.md is a plain copy of the root SKILL.md (str
   assert.equal(readFileSync(join(root, 'skills/veilpipe-secrets/SKILL.md'), 'utf8'), readFileSync(join(root, 'SKILL.md'), 'utf8'))
 })
 
+test('redact: a value marked not-to-save never takes a free base name; numbering otherwise unchanged', () => {
+  const known = new Map<string, string>()
+  const doc = redact(`see ${FAKE_STRIPE}`, C, known, () => true)
+  assert.deepEqual(doc.fresh.map(f => f.name), ['STRIPE_KEY_2'])
+  const real = ['sk', 'live', 'NOTREALNOTREALNOTREAL00001'].join('_')
+  assert.deepEqual(redact(`key ${real}`, C, known).fresh.map(f => f.name), ['STRIPE_KEY'])
+  // Base already taken (a stored or earlier value): a reserved value just takes the next number, as before.
+  const other = ['sk', 'live', 'NOTREALNOTREALNOTREAL00002'].join('_')
+  assert.deepEqual(redact(`x ${other}`, C, known, () => true).fresh.map(f => f.name), ['STRIPE_KEY_3'])
+  // Without the option (opencode, the CLI), naming is exactly as before.
+  assert.deepEqual(redact(`see ${FAKE_STRIPE}`, C, new Map()).fresh.map(f => f.name), ['STRIPE_KEY'])
+})
+
 test('store: values that say they are not real are never auto-saved from tool output', () => {
   // Stripe-shaped values are assembled here, so GitHub push protection does not read the fixtures as keys.
   const sk = (rest: string) => ['sk', 'live', rest].join('_')
@@ -745,6 +758,11 @@ test('store: values that say they are not real are never auto-saved from tool ou
     assert.equal(looksFake(v), true, v)
   // Stripe test-mode keys are real credentials developers keep in .env: not skipped. (Fake to a reader, no skip marker.)
   assert.equal(looksFake('sk_test_NOTREALNOTREALNOTREALNOTREAL1'), false)
+  // A marker alone is not enough: real passwords that happen to contain one, with a random-looking rest, are kept.
+  for (const v of ['Xq7!sampleRz92#Lm', 'k8Sdemo2Lq9vXz7Pw', 'hunter2Demo9Kq', 'p4ssw0rd-example-Zk81Qa'])
+    assert.equal(looksFake(v), false, v)
+  for (const v of ['FAKE-demo-password-0000', 'your-secret-here', 'sample_token', 'REDACTED', ['sk', 'test', 'FAKEDEMOFAKEDEMO0000'].join('_')])
+    assert.equal(looksFake(v), true, v)
 })
 
 test('store: auto-save wants every secret name, skips EMAIL (and EMAIL_2), and honours auto:false and skip', () => {

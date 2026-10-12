@@ -23,6 +23,8 @@ const S = {
   seeded: new Map<string, string>(),
   announced: new Set<string>(),
   noticed: false,
+  // Names of .env values skipped as placeholders, each told to the user once.
+  skippedFake: new Set<string>(),
 }
 
 async function readPatterns($: EngineInterface, path: string): Promise<PatternsFile | undefined> {
@@ -106,6 +108,13 @@ async function autoSave($: EngineInterface, fresh: Found[]) {
   }
 }
 
+// With the store on, values auto-save will not keep (anything not from the user's environment, and placeholders
+// from it) are kept off the free base names, so a real key seen later still gets $STRIPE_KEY, not $STRIPE_KEY_2.
+function notSaved(fromEnv: boolean): ((value: string) => boolean) | undefined {
+  if (!S.scope) return undefined
+  return fromEnv ? looksFake : () => true
+}
+
 // Values in this text that have a name but are not in the store yet: the fresh ones, and ones first seen somewhere
 // auto-save does not take from (a README), now coming from the user (a paste, a .env read).
 function unsaved(text: string): Found[] {
@@ -159,11 +168,11 @@ function sideEffects($: EngineInterface, fresh: Found[]) {
 }
 
 // Pure: every string of a tool result through the patterns, known values and their fragments.
-function redactResult(result: unknown): { result: unknown; fresh: Found[]; changed: boolean } {
+function redactResult(result: unknown, reserve?: (value: string) => boolean): { result: unknown; fresh: Found[]; changed: boolean } {
   const fresh: Found[] = []
   let changed = false
   const out = deepMap(result, s => {
-    const r = redact(s, S.compiled, known)
+    const r = redact(s, S.compiled, known, reserve)
     fresh.push(...r.fresh)
     const t = scrubFragments(r.text, known)
     if (t !== s) changed = true
@@ -280,11 +289,18 @@ export const register: Register = on => {
     // Pure from here: no I/O may sit between the raw result and what we return.
     if (ran.deny !== undefined) return ran
     if (size(ran.result) > MAX_SCAN_CHARS) return { result: 'veilpipe: output too large to scan for secrets; withheld.', isError: true } as typeof ran
-    const r = redactResult(ran.result)
+    const r = redactResult(ran.result, notSaved(envSource(e)))
     if (!r.changed) return ran
     sideEffects($, r.fresh)
     // Saved only from the user's environment (env dump, .env file), never from other files or command output.
-    if (envSource(e)) await autoSave($, unsaved(JSON.stringify(ran.result)).filter(f => !looksFake(f.value)))
+    if (envSource(e)) {
+      const found = unsaved(JSON.stringify(ran.result))
+      for (const f of found) if (looksFake(f.value) && !S.skippedFake.has(f.name)) {
+        S.skippedFake.add(f.name)
+        $.ui.toast(`veilpipe: $${f.name} looks like a placeholder (FAKE, EXAMPLE, your_key...), so it was not saved. If it is real: veilpipe secret add ${f.name}`)
+      }
+      await autoSave($, found.filter(f => !looksFake(f.value)))
+    }
     const tell = S.seeded.size ? toAnnounce(r.fresh, JSON.stringify(ran.result)) : r.fresh
     return { result: r.result, ...(ran.isError ? { isError: true } : {}), ...(tell.length > 0 ? { context: [note(tell, S.stored)] } : {}) } as typeof ran
   }).catch(async ($, e, next) => {
@@ -293,7 +309,7 @@ export const register: Register = on => {
     try {
       const ran = await next(e)
       if (ran.deny !== undefined) return ran
-      return { result: redactResult(ran.result).result, ...(ran.isError ? { isError: true } : {}) } as typeof ran
+      return { result: redactResult(ran.result, notSaved(false)).result, ...(ran.isError ? { isError: true } : {}) } as typeof ran
     } catch {
       return { result: 'veilpipe failed while redacting this result; withheld (fail closed).', isError: true } as any
     }
@@ -302,7 +318,7 @@ export const register: Register = on => {
   // 3. Text the engine injects by itself: @-files, "file changed on disk" notices, hook output.
   on('prompt.attachment', async ($, e, next) => {
     await ready($)
-    const r = redact(e.text, S.compiled, known)
+    const r = redact(e.text, S.compiled, known, notSaved(false))
     if (r.fresh.length > 0) sideEffects($, r.fresh)
     return next(r.text === e.text ? e : { ...e, text: r.text })
   }).catch(($, e, next) => next({ ...e, text: '[veilpipe withheld this attachment: the secret check failed]' }))

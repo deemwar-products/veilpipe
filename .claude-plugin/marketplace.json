@@ -7,7 +7,7 @@
       "name": "veilpipe",
       "source": "./",
       "description": "Rewrites secrets to $NAME (regex patterns file) in prompts, tool output and injected text before Claude sees them. Fails closed.",
-      "version": "0.2.2"
+      "version": "0.2.3"
     }
   ]
 }

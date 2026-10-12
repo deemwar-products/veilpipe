@@ -132,10 +132,20 @@ export function envSource(e: { tool?: unknown; command?: unknown; file_path?: un
 }
 
 // A value that says it is not real: documentation and demo keys (FAKE, EXAMPLE, DEMO, your_key, xxxxxxxx...).
+// A marker alone is not enough: a real password can contain 'demo' or 'sample'. It counts only when what is left,
+// once the vendor prefix (sk_live_, ghp_), markers, filler words (key, password, here...) and separators are gone,
+// does not look random (6+ characters mixing two of lower case, upper case, digits).
 // sk_test_ is not a marker: Stripe test-mode keys are real credentials kept in .env files. Never
 // auto-saved from tool output, so it cannot take a name a real key needs.
+const FAKE_FILL = /x{8,}|\*{4,}|(.)\1{11,}/i
+const FAKE_MARK = /fake|example|demo|dummy|sample|placeholder|changeme|redacted|your(?=[_-])/i
+const FAKE_FILLER = /api|keys?|passwords?|passwd|pass|pw|secrets?|tokens?|here|test|my|value|replace|with|this|me/gi
 export function looksFake(value: string): boolean {
-  return /fake|example|demo|dummy|sample|placeholder|changeme|redacted|your[_-]|x{8,}|\*{4,}|(.)\1{11,}/i.test(value)
+  if (FAKE_FILL.test(value)) return true
+  if (!FAKE_MARK.test(value)) return false
+  const rest = value.replace(/^[a-z]{2,5}(_(live|test))?_/i, '').replace(new RegExp(FAKE_MARK.source, 'gi'), '').replace(FAKE_FILLER, '').replace(/[^A-Za-z0-9]/g, '')
+  const kinds = [/[a-z]/, /[A-Z]/, /[0-9]/].filter(r => r.test(rest)).length
+  return !(rest.length >= 6 && kinds >= 2)
 }
 
 // Names a shell command uses: $NAME or ${NAME}.
@@ -415,10 +425,13 @@ function envName(raw: string): string {
 
 // The name a value gets: the same value always gets the same name; a different
 // value under a taken name gets _2, _3, ...
-function nameFor(value: string, base: string, known: Map<string, string>): string {
+// `reserve` marks values that will not be saved (a README example): they never take a free base name, which stays for
+// the real value the store will keep under it ($STRIPE_KEY), and get the next numbered one instead.
+function nameFor(value: string, base: string, known: Map<string, string>, reserve?: (value: string) => boolean): string {
   const had = known.get(value)
   if (had) return had
   const taken = new Set(known.values())
+  if (reserve?.(value) && !taken.has(base)) taken.add(base)
   let name = base
   for (let i = 2; taken.has(name); i++) name = `${base}_${i}`
   known.set(value, name)
@@ -437,12 +450,12 @@ export type Redacted = { text: string; fresh: Found[]; hits: Hit[] }
 // applies), so redact repeats until the text is stable: the neighbour is replaced too, live and at rest alike
 // (10-06: a store-wide replace on a real opencode store surfaced +325 such neighbours).
 export const REDACT_PASSES = 4
-export function redact(text: string, compiled: Compiled[], known: Map<string, string> = new Map()): Redacted {
+export function redact(text: string, compiled: Compiled[], known: Map<string, string> = new Map(), reserve?: (value: string) => boolean): Redacted {
   const before = new Set(known.keys())
   const hits: Hit[] = []
   let out = text
   for (let i = 0; i < REDACT_PASSES; i++) {
-    const r = redactOnce(out, compiled, known)
+    const r = redactOnce(out, compiled, known, reserve)
     hits.push(...r.hits)
     if (r.text === out) break
     out = r.text
@@ -452,13 +465,13 @@ export function redact(text: string, compiled: Compiled[], known: Map<string, st
   return { text: out, fresh, hits }
 }
 
-function redactOnce(text: string, compiled: Compiled[], known: Map<string, string>): { text: string; hits: Hit[] } {
+function redactOnce(text: string, compiled: Compiled[], known: Map<string, string>, reserve?: (value: string) => boolean): { text: string; hits: Hit[] } {
   const hits = scan(text, compiled)
   const templates = new Map<string, string>()
   let out = ''
   let at = 0
   for (const h of hits) {
-    const name = nameFor(h.value, h.name, known)
+    const name = nameFor(h.value, h.name, known, reserve)
     templates.set(name, h.replace)
     out += text.slice(at, h.start) + render(h.replace, name)
     at = h.end
