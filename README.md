@@ -106,6 +106,13 @@ opencode limits:
 
 `veilpipe uninstall` (and `veilpipe uninstall --opencode`), then delete the folder and `~/.local/bin/veilpipe`.
 
+That leaves the secret store, so a reinstall still has your saved keys. To delete them too:
+
+```sh
+rm -rf ~/.config/veilpipe                             # the encrypted store (and, on Linux, its key file)
+security delete-generic-password -s veilpipe-store    # macOS only: its key in the Keychain
+```
+
 ## Limits
 
 The promise is about the model, not your disk. The disk scrub covers only the values veilpipe replaced, in that
