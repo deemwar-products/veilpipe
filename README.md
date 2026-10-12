@@ -11,11 +11,12 @@ without the model ever seeing it. It runs entirely on your machine: the mod make
 
 ```sh
 git clone https://github.com/deemwar-products/veilpipe && cd veilpipe
-ln -s "$PWD/bin/veilpipe" ~/.local/bin/veilpipe     # the CLI
-veilpipe install                                     # every new Claude Code session loads the mod
+bin/veilpipe install                                 # every new Claude Code session loads the mod
+mkdir -p ~/.local/bin && ln -sf "$PWD/bin/veilpipe" ~/.local/bin/veilpipe    # the CLI, by name
 ```
+If `veilpipe` is then not found, `~/.local/bin` is not on your PATH (the macOS default): add it, or run `bin/veilpipe`.
 Or in one step (clones the pinned release to ~/.veilpipe, links the CLI, installs, runs doctor): `sh scripts/install.sh`.
-To try it in one session only, skip `veilpipe install` and run `claude --plugin-dir /path/to/veilpipe`.
+To try it in one session only, skip the install line and run `claude --plugin-dir /path/to/veilpipe`.
 
 ## First 5 minutes
 
