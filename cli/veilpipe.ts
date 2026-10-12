@@ -665,7 +665,7 @@ export function doctor(opts: { canary?: boolean; run?: Run; env?: NodeJS.Process
     const r = run(['claude', '-p', '--model', 'sonnet', '--plugin-dir', ROOT, '--session-id', sid, `Repeat my message back verbatim in backticks, then stop: deploy with ${CANARY}`], { env: { ...env, VEILPIPE_NO_STORE: '1' } })
     const sawName = r.stdout.includes('$STRIPE_KEY')
     const sawRaw = r.stdout.includes(CANARY)
-    add(sawName && !sawRaw ? 'ok' : 'fail', 'canary: model', sawRaw ? 'the model saw the raw fake key' : sawName ? 'the model saw $STRIPE_KEY' : `no answer to judge (exit ${r.status})`)
+    add(sawName && !sawRaw ? 'ok' : 'fail', 'canary: model', sawRaw ? 'saw the raw fake key' : sawName ? 'saw only $STRIPE_KEY, never the fake key' : `no answer to judge (exit ${r.status})`)
     const transcript = findTranscript(join(config, 'projects'), sid)
     if (!transcript) add('warn', 'canary: disk', 'no transcript found for the canary session')
     else {

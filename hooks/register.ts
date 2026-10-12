@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 
-import { compile, deepMap, merge, note, onMatchArgv, placeholderGuard, redact, referencedNames, scrubFile, scrubFragments, scrubJsonl, sliceGuard, storeReadGuard, storeWants } from './core'
+import { compile, deepMap, envSource, looksFake, merge, note, onMatchArgv, placeholderGuard, redact, referencedNames, scrubFile, scrubFragments, scrubJsonl, sliceGuard, storeReadGuard, storeWants } from './core'
 import type { Compiled, Found, PatternsFile } from './core'
 
 // Tool output bigger than this is not scanned in time; it is withheld instead.
@@ -104,6 +104,14 @@ async function autoSave($: EngineInterface, fresh: Found[]) {
       $.ui.log(`veilpipe: $${f.name} not saved`, { to: 'debug' })
     }
   }
+}
+
+// Values in this text that have a name but are not in the store yet: the fresh ones, and ones first seen somewhere
+// auto-save does not take from (a README), now coming from the user (a paste, a .env read).
+function unsaved(text: string): Found[] {
+  const out: Found[] = []
+  for (const [value, name] of known) if (!S.stored.has(name) && text.includes(value)) out.push({ name, value })
+  return out
 }
 
 // A stored value is in `known` from the start, so it is never fresh; the first time one appears this session the
@@ -247,7 +255,7 @@ export const register: Register = on => {
     const r = redact(e.text, S.compiled, known)
     if (r.fresh.length === 0 && r.text === e.text) return next(e)
     sideEffects($, r.fresh)
-    await autoSave($, r.fresh)
+    await autoSave($, unsaved(e.text))
     const tell = toAnnounce(r.fresh, e.text)
     const context = tell.length > 0 ? [...(e.context ?? []), note(tell, S.stored)] : e.context
     return next({ ...e, text: r.text, ...(context ? { context } : {}) })
@@ -275,7 +283,8 @@ export const register: Register = on => {
     const r = redactResult(ran.result)
     if (!r.changed) return ran
     sideEffects($, r.fresh)
-    await autoSave($, r.fresh)
+    // Saved only from the user's environment (env dump, .env file), never from other files or command output.
+    if (envSource(e)) await autoSave($, unsaved(JSON.stringify(ran.result)).filter(f => !looksFake(f.value)))
     const tell = S.seeded.size ? toAnnounce(r.fresh, JSON.stringify(ran.result)) : r.fresh
     return { result: r.result, ...(ran.isError ? { isError: true } : {}), ...(tell.length > 0 ? { context: [note(tell, S.stored)] } : {}) } as typeof ran
   }).catch(async ($, e, next) => {

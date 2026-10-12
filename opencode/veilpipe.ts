@@ -185,7 +185,7 @@ export const VeilpipePlugin = async ({ directory }: { directory: string }) => {
             if (t !== p.text) (changed = true), (p.text = t)
           }
         const first = output.parts.find(p => p.type === 'text')
-        if (fresh.length > 0 && first) first.text += `\n\n${note(fresh)}`
+        if (fresh.length > 0 && first) first.text += `\n\n${note(fresh, undefined, 'exec')}`
         // Also for a value already known: the TUI just wrote this message, raw, to its prompt history again.
         if (changed) await scrubDisk(input?.sessionID)
       } catch {
@@ -209,7 +209,7 @@ export const VeilpipePlugin = async ({ directory }: { directory: string }) => {
         output.title = clean(output.title ?? '', fresh)
         output.output = clean(output.output ?? '', fresh)
         output.metadata = deepMap(output.metadata, s => clean(s, fresh))
-        if (fresh.length > 0) output.output += `\n\n${note(fresh)}`
+        if (fresh.length > 0) output.output += `\n\n${note(fresh, undefined, 'exec')}`
       } catch {
         output.output = 'veilpipe failed while redacting this result; withheld (fail closed).'
         output.metadata = {}
@@ -270,7 +270,7 @@ export async function setup(ctx: any) {
       const fresh: Found[] = []
       const t = clean(text, fresh)
       if (t === text) return
-      h.prompt.text = fresh.length > 0 ? `${t}\n\n${note(fresh)}` : t
+      h.prompt.text = fresh.length > 0 ? `${t}\n\n${note(fresh, undefined, 'exec')}` : t
       // opencode already logged `run`'s argv and the TUI its history, both raw.
       await scrubDisk(h.sessionID, true)
     } catch {
@@ -291,7 +291,7 @@ export async function setup(ctx: any) {
         const fresh: Found[] = []
         const r: any = deepMap(h.result, s => clean(s, fresh))
         if (fresh.length > 0) {
-          const n = `\n\n${note(fresh)}`
+          const n = `\n\n${note(fresh, undefined, 'exec')}`
           if (Array.isArray(r?.content)) r.content.push({ type: 'text', text: n })
           if (typeof r?.output === 'string') r.output += n
           else if (typeof r?.output?.output === 'string') r.output.output += n

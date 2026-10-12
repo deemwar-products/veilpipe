@@ -110,3 +110,32 @@ test('a Write that puts the text $STRIPE_KEY into code is denied with guidance; 
   expect(written).toEqual(['/w/run.sh'])
   expect(JSON.stringify(ok)).toContain('run.sh')
 })
+
+// v0.2.1 bug: `head README.md` auto-saved the README's example keys. Tool output is saved only from the
+// user's environment (env dump, .env file) and never when the value says it is fake; a pasted key still is.
+test('auto-save: a README read stores nothing; a .env read and a paste do', async ($, on) => {
+  on_ = on
+  const saves: string[] = []
+  on('process.run', ($: any, e: any) => {
+    if (e.argv.includes('_load')) return { value: { exitCode: 0, stdout: JSON.stringify({ scope: '/w', entries: [] }), stderr: '' } }
+    if (e.argv.includes('_save')) return (saves.push(e.argv[e.argv.length - 1]), { value: { exitCode: 0, stdout: 'saved', stderr: '' } })
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
+  // Fake to a reader, but with none of the markers looksFake skips, so only the source rule can stop it.
+  const REAL_LOOKING = 'sk_test_NOTREALNOTREALNOTREALNOTREAL1'
+  let out = ''
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: out, stderr: '', interrupted: false } }) as any)
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  await started($)
+  out = `Set STRIPE_KEY=${FAKE_STRIPE} or STRIPE_KEY=${REAL_LOOKING}`
+  await $.tool.call({ tool: 'Bash', command: 'head README.md' } as any)
+  expect(saves).toEqual([])
+  out = `STRIPE=${FAKE_STRIPE}`
+  await $.tool.call({ tool: 'Bash', command: 'cat .env' } as any)
+  expect(saves).toEqual([]) // a .env value that says FAKE is not saved either
+  out = `STRIPE=${REAL_LOOKING}`
+  await $.tool.call({ tool: 'Bash', command: 'cat .env.local' } as any)
+  expect(saves).toEqual(['STRIPE_KEY_2'])
+  await $.prompt.submit({ text: `db is ${FAKE_DB}`, wait: false, origin: user } as any)
+  expect(saves).toEqual(['STRIPE_KEY_2', 'DB_PASSWORD'])
+})

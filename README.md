@@ -1,11 +1,11 @@
 # Veilpipe
 
 Veilpipe is a Claude Code mod (Claude Code 2.1.287 or newer). Secrets in what you type, what tools return and files
-you attach are replaced with names like `$STRIPE_KEY` before the model sees them: the model never sees the value. After
-each turn it also scrubs the values it replaced from that session's transcript and from `history.jsonl`; see Limits for
-what that disk scrub does not cover. Caught values go into veilpipe's own secret store, so a command that uses
-`$STRIPE_KEY` gets the value, in this session or a later one, without the model ever seeing it. It runs entirely on your
-machine: the mod makes no network calls of its own.
+you attach are replaced with names like `$STRIPE_KEY` before the model sees them: the model never sees the value.
+After each turn it also scrubs the values it replaced from that session's transcript, its subagents' transcripts and
+`history.jsonl`; see Limits for what that disk scrub does not cover. Keys you paste or keep in `.env` go into
+veilpipe's own secret store, so a command that uses `$STRIPE_KEY` gets the value, in this session or a later one,
+without the model ever seeing it. It runs entirely on your machine: the mod makes no network calls of its own.
 
 ## Install (Node 22.18+; nothing to npm install)
 
@@ -28,10 +28,15 @@ To try it in one session only, skip `veilpipe install` and run `claude --plugin-
 
 ## Its own secret store
 
-When veilpipe catches a value, it saves it under its `$NAME` in a local, encrypted store, scoped to the project (the
-nearest git root, else the folder). A Bash command the model writes with `$STRIPE_KEY` then gets the value filled in
-when it runs, in this session or a new one; the model, the command text and the transcript only ever hold the name.
-Output that prints a stored value shows `$NAME` instead.
+When veilpipe catches a value you type or paste, or one in your own environment (an `env` or `printenv` dump, or a
+command that only reads `.env`, `.env.local`, `.env.production` and the like, such as `cat .env` or `grep KEY .env`),
+it saves it under its `$NAME` in a local, encrypted store, scoped to the project (the nearest git root, else the
+folder). Values in other files and command output (a README, docs, source code, `git log`), or from a command that
+reads anything besides those files, are still replaced but never saved, and neither is a value that says it is not
+real (FAKE, EXAMPLE, DEMO, `your_key`, `xxxxxxxx`); add one yourself with `veilpipe secret add NAME`. A Bash command
+the model writes with `$STRIPE_KEY` then gets the value filled in when it runs, in this session or a new one; the
+model, the command text and the transcript only ever hold the name. Output that prints a stored value shows `$NAME`
+instead.
 
 - **The store:** one AES-256-GCM file, `~/.config/veilpipe/store/secrets.enc` (mode 600). Its key is in the macOS
   Keychain (`veilpipe-store`), or in a mode-600 key file next to it on Linux. Nothing is synced between machines.
@@ -64,11 +69,12 @@ is fixed: it never lets text through unchecked.
 
 ## opencode
 
-Tested with opencode 1.x (1.18.35, 1.19.0) and 2.x (2.0.22 to 2.0.26). `veilpipe install --opencode` gives opencode sessions
-the same protection, from the same patterns file. It writes `00-veilpipe.ts` to opencode's plugin folder; after an
-upgrade from an older kit, run it again. `veilpipe doctor` checks the install, and `veilpipe doctor --canary` also runs
-`opencode/canary.sh`: a real `opencode run` with a fake key against a local mock model (no model spend). It passes only
-if the model and opencode's storage hold 0 raw copies.
+Tested with opencode 1.x (1.18.35, 1.19.0) and 2.x (2.0.22 to 2.0.26). `veilpipe install --opencode` gives opencode
+sessions the same replacement and scrub, from the same patterns file (not the secret store: see limits below). It
+writes `00-veilpipe.ts` to opencode's plugin folder; after an upgrade from an older kit, run it again. `veilpipe
+doctor` checks the install, and `veilpipe doctor --canary` also runs `opencode/canary.sh`: a real `opencode run` with
+a fake key against a local mock model (no model spend). It passes only if the model and opencode's storage hold 0 raw
+copies.
 
 `veilpipe audit --opencode` is a dry run for what opencode stored before the install. It lists each table, column, row
 count and file it would rewrite, by count only, and writes nothing. `veilpipe audit --opencode --fix` changes them.
@@ -79,6 +85,9 @@ rolls back unless no match is left. opencode's
 login and credential tables are never read or changed.
 
 opencode limits:
+- The secret store is Claude Code only for now: in opencode, values are replaced but not saved, and `$NAME` is not
+  filled into the commands the model writes. A command reaches a stored value through
+  `veilpipe exec '<command>'`, and veilpipe tells the model so.
 - The TUI writes what you type to its prompt history before any plugin sees it. It is scrubbed when the message
   reaches the server, within seconds.
 - A running shell command's output is stored raw until the command finishes, and the TUI may show it on screen. If
@@ -108,6 +117,10 @@ are not sandboxed: read the code before you install it.
 The store widens what one bad command can reach: a prompt-injected command in a project can use every value stored for
 that project (and the global ones), not just what you pasted in that session. Output that prints a value is still
 replaced, but a value a command sends over the network is out of veilpipe's sight. Turn auto-save off where that matters.
+
+Auto-save keeps only what you type or paste and what is in your own environment or `.env` files. A real key that
+lives only in another file (say `config.json`) is replaced but not saved, so commands can't use it until you run
+`veilpipe secret add NAME`; veilpipe tells the model so.
 
 Questions and reports: io@deemwar.com
 

@@ -55,6 +55,89 @@ export function storeWants(file: PatternsFile, name: string): boolean {
   return !(file.store?.skip ?? STORE_SKIP_DEFAULT).includes(base)
 }
 
+// Where auto-save may take a value from (v0.2.1 bug: `head README.md` stored the README's example keys as $STRIPE_KEY,
+// so a later real key would have become $STRIPE_KEY_2 and commands using $STRIPE_KEY would get the example).
+// What the user types or pastes is always saved. From tool output, only the user's own environment: an env dump
+// (`env`, `printenv NAME`) or a read of a .env file, optionally filtered (`| grep KEY`), and nothing else in the same
+// command. Anything the parser does not model (substitutions, globs, other programs, extra files) is not a source.
+const ENV_STAGE = '(local|dev|development|prod|production|staging|stage|test|testing|ci|preview|qa|uat)'
+const ENV_FILE = new RegExp(`(^|/)(\\.env(\\.${ENV_STAGE})?(\\.local)?|${ENV_STAGE}\\.env)$`)
+export const isEnvFile = (p: string) => ENV_FILE.test(p)
+
+// Shell words and the operators | && ; of a plain command line, or undefined for anything else.
+function shellWords(command: string): string[] | undefined {
+  const c = command.replace(/\$\{HOME\}/g, '$HOME').replace(/(^|\s)(2>&1|[12]?>\s*\/dev\/null)(?=\s|$)/g, ' ')
+  const out: string[] = []
+  let w = ''
+  let has = false
+  const end = () => { if (has) out.push(w); w = ''; has = false }
+  for (let i = 0; i < c.length; i++) {
+    const ch = c[i]!
+    if (ch === "'" || ch === '"') {
+      const j = c.indexOf(ch, i + 1)
+      if (j < 0) return undefined
+      const inner = c.slice(i + 1, j)
+      if (ch === '"' && /[`\\]|\$\(/.test(inner)) return undefined
+      w += inner; has = true; i = j
+    } else if (/\s/.test(ch)) end()
+    else if (c.startsWith('&&', i)) { end(); out.push('&&'); i++ }
+    else if (ch === '|' || ch === ';') { if (c[i + 1] === '|') return undefined; end(); out.push(ch) }
+    else if (/[`\\(){}<>&*?[\]!#]/.test(ch)) return undefined
+    else { w += ch; has = true }
+  }
+  end()
+  return out
+}
+
+const FILTERS: Record<string, 'pattern' | 'numbers'> = { grep: 'pattern', rg: 'pattern', awk: 'pattern', sed: 'pattern', sort: 'numbers', head: 'numbers', tail: 'numbers', cut: 'numbers', uniq: 'numbers' }
+const READERS: Record<string, 'pattern' | 'numbers' | 'files'> = { cat: 'files', source: 'files', '.': 'files', head: 'numbers', tail: 'numbers', grep: 'pattern', rg: 'pattern', sed: 'pattern', awk: 'pattern' }
+
+// The non-flag words of one stage after its program's own argument (a grep pattern; head's counts).
+function operands(kind: 'pattern' | 'numbers' | 'files', args: string[]): string[] {
+  const words = args.filter(a => !a.startsWith('-'))
+  if (kind === 'pattern') return words.slice(1)
+  if (kind === 'numbers') return words.filter(x => !/^\d+$/.test(x))
+  return words
+}
+const envPath = (w: string) => !/\$/.test(w.replace(/^\$HOME\//, '')) && isEnvFile(w)
+
+export function envSource(e: { tool?: unknown; command?: unknown; file_path?: unknown }): boolean {
+  if (e.tool === 'Read') return typeof e.file_path === 'string' && isEnvFile(e.file_path)
+  if (e.tool !== 'Bash' || typeof e.command !== 'string') return false
+  const words = shellWords(e.command)
+  if (!words) return false
+  // Commands (split on && and ;), each a pipeline of stages (split on |), each a list of words.
+  const cmds: string[][][] = [[[]]]
+  for (const w of words) {
+    if (w === '&&' || w === ';') cmds.push([[]])
+    else if (w === '|') cmds.at(-1)!.push([])
+    else cmds.at(-1)!.at(-1)!.push(w)
+  }
+  let source = false
+  for (const stages of cmds) {
+    if (stages.some(st => st.length === 0)) return false
+    const [prog, ...args] = stages[0]!
+    if (stages.length === 1 && prog === 'set' && args.length === 1 && /^[-+]a$/.test(args[0]!)) continue
+    if (prog === 'env' || prog === '/usr/bin/env' || prog === 'printenv') {
+      if (prog !== 'printenv' ? args.length > 0 : !args.every(a => /^[A-Z_][A-Z0-9_]*$/.test(a))) return false
+    } else if (prog && READERS[prog]) {
+      const files = operands(READERS[prog]!, args)
+      if (files.length === 0 || !files.every(envPath)) return false
+    } else return false
+    // Later stages only filter what came before: no file of their own.
+    for (const [p, ...a] of stages.slice(1)) if (!p || !FILTERS[p] || operands(FILTERS[p]!, a).length > 0) return false
+    source = true
+  }
+  return source
+}
+
+// A value that says it is not real: documentation and demo keys (FAKE, EXAMPLE, DEMO, your_key, xxxxxxxx...).
+// sk_test_ is not a marker: Stripe test-mode keys are real credentials kept in .env files. Never
+// auto-saved from tool output, so it cannot take a name a real key needs.
+export function looksFake(value: string): boolean {
+  return /fake|example|demo|dummy|sample|placeholder|changeme|redacted|your[_-]|x{8,}|\*{4,}|(.)\1{11,}/i.test(value)
+}
+
 // Names a shell command uses: $NAME or ${NAME}.
 export function referencedNames(command: string): string[] {
   return [...new Set([...command.matchAll(/\$\{?([A-Z_][A-Z0-9_]*)\}?/g)].map(m => m[1]!))]
@@ -545,7 +628,9 @@ export function onMatchArgv(argv: string[], name: string): string[] {
 
 // The note the model gets beside a rewritten prompt or tool result. fillable: names the store holds, which a Bash
 // command fills in when it runs; for any other name the note says plainly that commands cannot use it.
-export function note(fresh: Found[], fillable: Set<string> = new Set()): string {
+// via 'exec': the host fills nothing into commands itself (opencode), so a stored value is reached only through
+// `veilpipe exec`, which fills the names a command uses from the store and scrubs its output.
+export function note(fresh: Found[], fillable: Set<string> = new Set(), via: 'fill' | 'exec' = 'fill'): string {
   const names = fresh.map(f => `$${f.name}`).join(', ')
   const can = fresh.filter(f => fillable.has(f.name)).map(f => f.name)
   const cannot = fresh.filter(f => !fillable.has(f.name)).map(f => `$${f.name}`)
@@ -553,7 +638,8 @@ export function note(fresh: Found[], fillable: Set<string> = new Set()): string 
   return (
     `veilpipe replaced ${fresh.length} sensitive value${fresh.length === 1 ? '' : 's'} with ${names} before you saw ${fresh.length === 1 ? 'it' : 'them'}. ` +
     (can.length ? `${can.map(n => `$${n}`).join(', ')} ${can.length === 1 ? 'is' : 'are'} in the user's local secret store: write ${can.length === 1 ? 'it' : 'them'} as shell variables in Bash ("$${one}") and the value is filled in when the command runs. ` : '') +
-    (cannot.length ? `${cannot.join(', ')} ${cannot.length === 1 ? 'is' : 'are'} not available to commands; if one is needed, ask the user to run \`veilpipe secret add ${cannot[0]!.slice(1)}\` themselves (never to paste the value here). ` : '') +
+    (cannot.length && via === 'exec' ? `${cannot.join(', ')} ${cannot.length === 1 ? 'is' : 'are'} not filled into commands here. If a command needs one, ask the user to run \`veilpipe secret add ${cannot[0]!.slice(1)}\` themselves if it is not stored yet (never to paste the value here), then run the command as \`veilpipe exec '<command using $${cannot[0]!.slice(1)}>'\`: it fills stored names in and hides them in the output. ` : '') +
+    (cannot.length && via === 'fill' ? `${cannot.join(', ')} ${cannot.length === 1 ? 'is' : 'are'} not available to commands; if one is needed, ask the user to run \`veilpipe secret add ${cannot[0]!.slice(1)}\` themselves (never to paste the value here). ` : '') +
     `In code, read values from the environment (process.env.${one}, os.environ["${one}"]); never write the text $${one} into a file, it is not the value. ` +
     'Do not ask the user to paste a value again, and do not try to print, slice or encode it.'
   )
