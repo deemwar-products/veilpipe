@@ -167,37 +167,99 @@ export function storeReadGuard(command: string): string | undefined {
 
 const INTERPRETER = /(^|[^\w.-])(sh|bash|zsh|dash|ksh|fish|eval|exec|source|ssh|su|osascript|xargs|tmux|screen|script|expect|parallel|python3?|node|perl|ruby|deno|bun|php|lua|tclsh|awk|gawk)($|[^\w.-])/
 
-// The command with prose blanked: quoted strings holding whitespace (their $(...) and `...` kept, since those run) and
-// heredoc bodies. A quoted word without spaces (a path) stays.
+// The command with prose blanked: quoted strings holding whitespace and heredoc bodies. What runs is kept, scanned the
+// same way: $(...) and `...` (also inside double quotes and unquoted heredocs), so `"$(cat <<'EOF' ... EOF)"` (how
+// agents pass a message) is prose, while `"$(security ...)"` is not. Escaped \$( and \` are text. A quoted word without
+// spaces (a path) stays.
 export function withoutProse(command: string): string {
   let out = ''
   for (let i = 0; i < command.length;) {
     const c = command[i]!
     if (c === '\\') { out += command.slice(i, i + 2); i += 2; continue }
-    const doc = c === '<' && /^<<-?\s*(['"]?)([A-Za-z_][\w-]*)\1/.exec(command.slice(i))
+    const doc = c === '<' ? heredocAt(command, i) : undefined
     if (doc) {
-      const eol = command.indexOf('\n', i)
-      if (eol < 0) { out += command.slice(i); break }
-      const end = new RegExp(`^\\t*${doc[2]}$`, 'm')
-      const body = command.slice(eol + 1)
-      const m = end.exec(body)
-      const len = m ? m.index : body.length
-      out += command.slice(i, eol + 1) + (doc[1] ? '' : substitutions(body.slice(0, len)))
-      i = eol + 1 + len
+      out += command.slice(i, doc.bodyStart) + (doc.quoted ? '' : runs(command.slice(doc.bodyStart, doc.bodyEnd)))
+      i = doc.end
+      continue
+    }
+    if (c === '$' && command[i + 1] === '(' || c === '`') {
+      const end = closeOf(command, i)
+      out += c === '`' ? '`' + withoutProse(command.slice(i + 1, end)) + '`' : '$(' + withoutProse(command.slice(i + 2, end)) + ')'
+      i = end + 1
       continue
     }
     if (c !== "'" && c !== '"') { out += c; i++; continue }
-    let j = i + 1
-    while (j < command.length && command[j] !== c) j += c === '"' && command[j] === '\\' ? 2 : 1
-    const inner = command.slice(i + 1, j)
-    const literal = c === '"' ? inner.replace(/\$\([^)]*\)|`[^`]*`/g, '') : inner
-    out += /\s/.test(literal) ? (c === '"' ? substitutions(inner) : '') : command.slice(i, j + 1)
-    i = j + 1
+    const end = c === "'" ? indexOr(command, "'", i + 1) : dquoteEnd(command, i + 1)
+    const inner = command.slice(i + 1, end)
+    if (c === "'") out += /\s/.test(inner) ? ' ' : command.slice(i, end + 1)
+    else {
+      const literal = inner.replace(/\\./g, 'x').replace(SUBST, '')
+      out += /\s/.test(literal) ? runs(inner) : '"' + runs(inner, true) + '"'
+    }
+    i = end + 1
   }
   return out
 }
 
-const substitutions = (text: string) => ' ' + [...text.matchAll(/\$\([^)]*\)|`[^`]*`/g)].map(m => m[0]).join(' ') + ' '
+const SUBST = /\$\((?:[^()]|\([^()]*\))*\)|`[^`]*`/g
+const indexOr = (s: string, ch: string, from: number) => { const k = s.indexOf(ch, from); return k < 0 ? s.length : k }
+
+// Only what runs in double-quoted (or unquoted-heredoc) text: each $(...) and unescaped `...`, scanned for prose too.
+// With keep, the literal text stays too (a quoted path built with a substitution).
+function runs(text: string, keep = false): string {
+  let out = keep ? '' : ' '
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '\\') { if (keep) out += text.slice(i, i + 2); i++; continue }
+    if (text[i] === '$' && text[i + 1] === '(' || text[i] === '`') {
+      const end = closeOf(text, i)
+      out += withoutProse(text.slice(i, end + 1)) + (keep ? '' : ' ')
+      i = end
+    } else if (keep) out += text[i]
+  }
+  return out
+}
+
+function dquoteEnd(s: string, from: number): number {
+  for (let j = from; j < s.length; j++) {
+    if (s[j] === '\\') j++
+    else if (s[j] === '"') return j
+    else if (s[j] === '$' && s[j + 1] === '(' || s[j] === '`') j = closeOf(s, j)
+  }
+  return s.length
+}
+
+// Index of the ) closing $( at i, or of the ` closing ` at i; skips quotes, heredoc bodies and nested $( ).
+function closeOf(s: string, i: number): number {
+  if (s[i] === '`') {
+    for (let j = i + 1; j < s.length; j++) { if (s[j] === '\\') j++; else if (s[j] === '`') return j }
+    return s.length
+  }
+  let depth = 1
+  for (let j = i + 2; j < s.length; j++) {
+    const c = s[j]!
+    if (c === '\\') { j++; continue }
+    if (c === "'") { j = indexOr(s, "'", j + 1); continue }
+    if (c === '"') { j = dquoteEnd(s, j + 1); continue }
+    const doc = c === '<' ? heredocAt(s, j) : undefined
+    if (doc) { j = doc.end - 1; continue }
+    if (c === '$' && s[j + 1] === '(') { j = closeOf(s, j); continue }
+    if (c === '(') depth++
+    else if (c === ')' && --depth === 0) return j
+  }
+  return s.length
+}
+
+// A heredoc starting at i: its body runs from the next line to the delimiter line.
+function heredocAt(s: string, i: number): { quoted: boolean; bodyStart: number; bodyEnd: number; end: number } | undefined {
+  const m = /^<<-?\s*(['"]?)([A-Za-z_][\w-]*)\1/.exec(s.slice(i))
+  if (!m) return undefined
+  const eol = s.indexOf('\n', i)
+  if (eol < 0) return undefined
+  const body = s.slice(eol + 1)
+  const close = new RegExp(`^\\t*${m[2]}$`, 'm').exec(body)
+  const bodyEnd = eol + 1 + (close ? close.index : body.length)
+  return { quoted: !!m[1], bodyStart: eol + 1, bodyEnd, end: close ? bodyEnd + close[0].length : s.length }
+}
 
 type CompiledAllow = { regexes: RegExp[]; stopwords: string[]; target: 'secret' | 'match' | 'line' }
 

@@ -85,6 +85,19 @@ test('a Bash command that slices a protected variable is denied', async ($, on) 
   expect(JSON.stringify(r)).toContain('slices')
 })
 
+test('a message that only quotes a Keychain read runs; the read itself is denied (10-12, v0.2.5 on the Mac)', async ($, on) => {
+  on_ = on
+  const ran: string[] = []
+  on('tool.call', { tool: 'Bash' }, ($, e: any) => (ran.push(e.command), { result: { stdout: 'sent', stderr: '', interrupted: false } }) as any)
+  await started($)
+  const K = 'security find-generic-password -s veilpipe-store'
+  const msg: any = await $.tool.call({ tool: 'Bash', command: `chat reply r-1 "$(cat <<'EOF'\nI can't run ${K} here.\nEOF\n)"` } as any)
+  expect(JSON.stringify(msg)).toContain('sent')
+  const read: any = await $.tool.call({ tool: 'Bash', command: `${K} -w` } as any)
+  expect(JSON.stringify(read)).toContain('reads the Keychain')
+  expect(ran.length).toBe(1)
+})
+
 test('a broken patterns file refuses prompts instead of passing them raw (fail closed)', async ($, on) => {
   let reached = false
   mock.env(on, { HOME: '/nonexistent-home' })

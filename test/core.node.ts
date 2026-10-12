@@ -795,6 +795,15 @@ test('store: referencedNames finds $NAME and ${NAME}; storeReadGuard stops direc
     'echo "k: `' + K + ' -w`"', `sh <<'EOF'\n${K} -w\nEOF`, `cat <<EOF\n$(${K} -w)\nEOF`])
     assert.match(storeReadGuard(c)!, /Keychain/, c)
   assert.match(storeReadGuard('cat "$HOME/.config/veilpipe/store/secrets.enc"')!, /store files/)
+  // 10-12 on the Mac (v0.2.5 still refused it): a message passed the way agents pass one, through a quoted heredoc in
+  // $(...), and escaped backticks or \$( in a double-quoted message, are text.
+  for (const c of [`chat reply r-1 "$(cat <<'EOF'\nCEO: I can't run ${K} (the guard blocks it, correctly).\nEOF\n)"`,
+    'chat reply r-1 "run \\`' + K + '\\` please"', `chat reply r-1 "run \\$(${K}) please"`, `chat reply r-1 "a (b ${K}) c"`])
+    assert.equal(storeReadGuard(c), undefined, c)
+  for (const c of [`x="$(${K} -w)"`, `echo "$(cat <<EOF\n$(${K} -w)\nEOF\n)"`, `echo "$(cat <<'EOF'\n${K} -w\nEOF\n)" | sh`,
+    `chat reply r-1 "$(cat <<'EOF'\nhi there\nEOF\n)"; ${K} -w`])
+    assert.match(storeReadGuard(c)!, /Keychain/, c)
+  assert.match(storeReadGuard('cat "$(echo ~/.config/veilpipe/store)/secrets.enc"')!, /store files/)
 })
 
 test('store: the note promises a fill only for stored names, and says plainly when a name cannot be used', () => {
