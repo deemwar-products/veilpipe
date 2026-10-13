@@ -73,7 +73,7 @@ is fixed: it never lets text through unchecked.
 
 ## opencode
 
-Tested with opencode 1.x (1.18.35, 1.19.0) and 2.x (2.0.22 to 2.0.27). `veilpipe install --opencode` gives opencode
+Tested with opencode 1.x (1.18.35, 1.19.0) and 2.x (2.0.22 to 2.0.28). `veilpipe install --opencode` gives opencode
 sessions the same replacement and scrub, from the same patterns file (not the secret store: see limits below). It
 writes `00-veilpipe.ts` to opencode's plugin folder; after an upgrade from an older kit, run it again. `veilpipe
 doctor` checks the install, and `veilpipe doctor --canary` also runs `opencode/canary.sh`: a real `opencode run` with
