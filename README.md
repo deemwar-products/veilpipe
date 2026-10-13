@@ -18,6 +18,12 @@ If `veilpipe` is then not found, `~/.local/bin` is not on your PATH (the macOS d
 Or in one step (clones the pinned release to ~/.veilpipe, links the CLI, installs, runs doctor): `sh scripts/install.sh`.
 To try it in one session only, skip the install line and run `claude --plugin-dir /path/to/veilpipe`.
 
+**Or as a Claude Code plugin:** `claude plugin marketplace add deemwar-products/veilpipe`, then
+`claude plugin install veilpipe@deemwar`. That gives every session the mod but not the `veilpipe` CLI by name; for it,
+`mkdir -p ~/.local/bin && ln -sf ~/.claude/plugins/marketplaces/deemwar/bin/veilpipe ~/.local/bin/veilpipe`.
+Remove it with `claude plugin uninstall veilpipe@deemwar`. Use one install path, not both: where both are present the
+plugin copy wins and the other is not loaded, so run `veilpipe uninstall` first if you switch.
+
 ## First 5 minutes
 
 1. `veilpipe doctor`: versions, rules load, tests pass, installed. `veilpipe doctor --canary` also sends one fake key
