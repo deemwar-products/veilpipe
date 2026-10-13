@@ -131,7 +131,9 @@ replaced, but a value a command sends over the network is out of veilpipe's sigh
 
 Auto-save keeps only what you type or paste and what is in your own environment or `.env` files. A real key that
 lives only in another file (say `config.json`) is replaced but not saved, so commands can't use it until you run
-`veilpipe secret add NAME`; veilpipe tells the model so.
+`veilpipe secret add NAME`; veilpipe tells the model so. If your Claude Code settings deny reading `.env` files (a
+`permissions.deny` rule), the session never sees those values, so nothing is saved from them either: add the ones
+commands need with `veilpipe secret add NAME`.
 
 Questions and reports: io@deemwar.com
 
