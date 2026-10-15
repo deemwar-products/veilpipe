@@ -144,6 +144,7 @@ commands need with `veilpipe secret add NAME`.
 **Want it set up for your team?** Deemwar does a one-week, fixed-price Claude Code setup: a team CLAUDE.md, hooks, and
 Veilpipe on your repos, with secrets kept out of the model.
 [deemwar.com/consulting](https://deemwar.com/consulting?utm_source=veilpipe&utm_medium=github-readme&utm_campaign=veilpipe)
+What such a review finds, run on this repo: [sample agent-security review](https://deemwar.com/insights/veilpipe-sample-review?utm_source=veilpipe&utm_medium=github-readme&utm_campaign=veilpipe).
 
 Questions and reports: io@deemwar.com
 
