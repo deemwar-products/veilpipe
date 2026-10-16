@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Veilpipe</title>
+<meta name="description" content="Veilpipe replaces secrets with $NAME placeholders before your AI coding assistant's model sees them. Open source, Apache-2.0.">
+<meta property="og:title" content="Veilpipe">
+<meta property="og:description" content="Secrets become $NAME before the model sees them.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://veilpipe.deemwar.com/">
+<meta property="og:image" content="https://veilpipe.deemwar.com/poster.jpg">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="720">
+<meta property="og:image:alt" content="A terminal: a prompt with fake keys, and Claude repeating it back with $STRIPE_KEY and $DB_PASSWORD in their place">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://veilpipe.deemwar.com/">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23272822'/%3E%3Ctext x='16' y='22' font-family='monospace' font-size='16' font-weight='700' fill='%23a6e22e' text-anchor='middle'%3E$%3C/text%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #fafaf7; --fg: #1d1f1a; --muted: #5d6157; --card: #ffffff; --line: #e3e4dc;
+  --accent: #4f7a10; --code-bg: #272822; --code-fg: #f2f2ea; --code-accent: #a6e22e;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #16170f; --fg: #ecede6; --muted: #a3a69a; --card: #1f2118; --line: #33362b;
+    --accent: #a6e22e; --code-bg: #0f100b; --code-fg: #f2f2ea; --code-accent: #a6e22e;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #16170f; --fg: #ecede6; --muted: #a3a69a; --card: #1f2118; --line: #33362b;
+  --accent: #a6e22e; --code-bg: #0f100b; --code-fg: #f2f2ea; --code-accent: #a6e22e;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 17px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+.wrap { max-width: 960px; margin: 0 auto; padding: 0 16px; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+header { padding: 56px 0 24px; }
+h1 { font-size: clamp(2rem, 6vw, 3.2rem); line-height: 1.1; margin: 0 0 12px; letter-spacing: -0.02em; }
+h1 .name { color: var(--accent); }
+.lede { font-size: clamp(1.05rem, 2.6vw, 1.3rem); color: var(--muted); margin: 0; max-width: 40em; }
+.lede code { color: var(--fg); }
+.video { margin: 28px 0 8px; border-radius: 12px; overflow: hidden; background: var(--code-bg); border: 1px solid var(--line); }
+.video video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; }
+.hint { color: var(--muted); font-size: 0.9rem; margin: 0 0 8px; }
+section { padding: 36px 0; border-top: 1px solid var(--line); }
+h2 { font-size: 1.5rem; margin: 0 0 14px; letter-spacing: -0.01em; }
+.cols { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px; }
+.card h3 { margin: 0 0 6px; font-size: 1.05rem; }
+.card p { margin: 0; color: var(--muted); }
+.step { font-family: ui-monospace, monospace; color: var(--accent); font-weight: 700; margin-right: 6px; }
+.compare { background: var(--code-bg); color: var(--code-fg); border-radius: 10px; padding: 16px 18px; overflow-x: auto; font-size: 0.92rem; margin: 18px 0 0; }
+.compare .k { color: #8f9283; display: inline-block; width: 8.5em; }
+.compare .ph { color: var(--code-accent); }
+.install {
+  display: flex; align-items: center; gap: 10px; background: var(--code-bg); color: var(--code-fg);
+  border-radius: 10px; padding: 14px 14px 14px 18px; overflow-x: auto;
+}
+.install code { flex: 1; white-space: nowrap; font-size: 0.98rem; }
+.install code::before { content: "$ "; color: var(--code-accent); }
+button.copy {
+  flex: none; font: inherit; font-size: 0.85rem; border: 1px solid #4a4d3f; background: transparent; color: var(--code-fg);
+  border-radius: 7px; padding: 6px 12px; cursor: pointer;
+}
+button.copy:hover { border-color: var(--code-accent); color: var(--code-accent); }
+.sha { font-size: 0.85rem; color: var(--muted); word-break: break-all; margin: 10px 0 0; }
+.small { color: var(--muted); font-size: 0.95rem; }
+.small a, .sha a, footer a { color: var(--accent); }
+ul.limits { margin: 8px 0 0; padding-left: 1.2em; color: var(--muted); }
+details { margin-top: 14px; }
+summary { cursor: pointer; color: var(--muted); }
+@media (max-width: 560px) {
+  .install { align-items: flex-start; }
+  .install code { white-space: normal; overflow-wrap: anywhere; font-size: 0.9rem; }
+  .compare { font-size: 0.8rem; }
+}
+footer { padding: 28px 0 44px; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header>
+    <h1><span class="name">Veilpipe</span>: secrets become <code>$NAME</code> before the model sees them</h1>
+    <p class="lede">A mod for Claude Code (and a plugin for opencode). API keys, passwords and tokens in your prompts and tool
+      output are replaced with names like <code>$STRIPE_KEY</code> on your machine, so the model never sees the value.</p>
+    <div class="video">
+      <video controls muted playsinline preload="metadata" poster="poster.jpg">
+        <source src="demo-1080p.mp4" type="video/mp4">
+      </video>
+    </div>
+    <p class="hint">65 seconds, captions on screen. Every command in it really runs; every key in it is fake.</p>
+  </header>
+
+  <section>
+    <h2>The problem</h2>
+    <div class="cols">
+      <div class="card"><h3>You paste a key</h3><p>To debug a payment or a login, the key goes into the prompt, and the prompt goes to the model provider.</p></div>
+      <div class="card"><h3>A tool prints one</h3><p>The assistant runs <code>cat .env</code> or reads a config file. Its output is sent to the model too.</p></div>
+      <div class="card"><h3>Hooks can only block</h3><p>A settings hook can stop a prompt, which stops your work. It can't rewrite the prompt and let you carry on.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>How it works</h2>
+    <div class="cols">
+      <div class="card"><h3><span class="step">1</span>Catch</h3><p>Veilpipe hooks every path to the model: what you type or paste, tool output, and text the engine injects.</p></div>
+      <div class="card"><h3><span class="step">2</span>Replace</h3><p>232 patterns (217 of them from the gitleaks ruleset) turn each secret into a stable name. The same value always gets the same name.</p></div>
+      <div class="card"><h3><span class="step">3</span>Check</h3><p><code>veilpipe doctor --canary</code> sends a fake key through a real session and confirms the model only saw the name.</p></div>
+    </div>
+<pre class="compare"><span class="k">you type:</span>deploy with sk_test_FAKEDEMO… to postgres://admin:FAKE-demo…@db.example.com/app
+<span class="k">model sees:</span>deploy with <span class="ph">$STRIPE_KEY</span> to postgres://admin:<span class="ph">$DB_PASSWORD</span>@db.example.com/app</pre>
+    <p class="small" style="margin-top:16px"><strong>Limits, plainly.</strong> Veilpipe guards what the model sees. It does not clean up what is already on your disk:</p>
+    <ul class="limits">
+      <li>transcripts written before you installed it, or by sessions started without it, are untouched;</li>
+      <li>the scrub after each turn covers that session's transcript, its subagents' transcripts and your prompt history; text the model writes itself is stored as written;</li>
+      <li><code>veilpipe audit</code> lists secrets already on disk (names and counts, never values);</li>
+      <li>only keys you paste or keep in <code>.env</code> or your environment are saved for commands; one that lives only in another file is replaced but not saved until you run <code>veilpipe secret add</code>;</li>
+      <li>a prompt-injected command can use every value stored for that project, and a value sent over the network is out of veilpipe's sight; turn auto-save off where that matters.</li>
+    </ul>
+  </section>
+
+  <section id="store">
+    <h2>Its own secret store</h2>
+    <p class="small">A value you paste, or one in your own <code>.env</code> or environment, is saved under its name in a local, encrypted store for that project. Values in other files (a README, docs, code) are replaced but never saved, nor is any value marked FAKE or EXAMPLE. When the model later
+      writes a command with <code>$STRIPE_KEY</code>, in the same session or a new one, the value is filled in as the command
+      runs. The model, the command text and the transcript only ever hold the name.</p>
+    <div class="cols">
+      <div class="card"><h3>Encrypted, on your machine</h3><p>One AES-256-GCM file; its key in the macOS Keychain (a private key file on Linux). Nothing is synced.</p></div>
+      <div class="card"><h3>Per project</h3><p>Each project folder has its own <code>$STRIPE_KEY</code>. A staging and a prod password stay apart as <code>$DB_PASSWORD</code> and <code>$DB_PASSWORD_2</code>.</p></div>
+      <div class="card"><h3>Yours to manage</h3><p><code>veilpipe secret ls</code> shows names and lengths, never values. Turn auto-save off with one line.</p></div>
+    </div>
+  </section>
+
+  <section id="install">
+    <h2>Install</h2>
+    <div class="install">
+      <code id="cmd">curl -fsSL https://veilpipe.deemwar.com/install.sh | sh</code>
+      <button class="copy" type="button" data-copy="cmd">Copy</button>
+    </div>
+    <p class="sha">install.sh sha256 <code>0dcbd8b0cd6767767a6e9569f4d8d46073f380a24f9b9378ac09ddef15cd6cd6</code>.
+      <a href="install.sh">Read it first</a> (about 50 lines), or check:
+      <code>curl -fsSL https://veilpipe.deemwar.com/install.sh | sha256sum</code></p>
+    <p class="small">Needs git and Node 22.18+ (nothing to npm install, no sudo). It clones release v0.2.6 to
+      <code>~/.veilpipe</code>, links the <code>veilpipe</code> CLI into <code>~/.local/bin</code>, loads the mod into new Claude Code
+      sessions (and opencode, if you have it), and runs <code>veilpipe doctor</code>. Running sessions keep the code they started
+      with, so restart them. To undo: <code>veilpipe uninstall</code>.</p>
+    <details>
+      <summary>Transcript of the video</summary>
+      <p class="small">When you work with an AI coding assistant, secrets slip in. You paste a key to debug a payment, or a tool
+        prints a config file. All of it goes to the model. Veilpipe stops that at the door. Here is a prompt with a fake Stripe key
+        and a fake database password. Veilpipe swaps each value for a name: $STRIPE_KEY, $DB_PASSWORD. The values are listed only by
+        name and length, never shown. Now a real Claude session with Veilpipe loaded. We ask it to repeat our message, word for word.
+        It repeats the names. The model never saw the values. You can check this yourself at any time. veilpipe doctor, with the
+        canary option, sends a fake key through a real session and confirms the model only saw the name. One honest limit: Veilpipe
+        guards what the model sees; it does not clean up what is already on your disk. It is open source, Apache 2.0, and installs
+        with one line.</p>
+    </details>
+  </section>
+</main>
+<footer>
+  <div class="wrap" style="margin-bottom:12px"><strong>Want it set up for your team?</strong> Deemwar does a one-week, fixed-price Claude Code setup: a team CLAUDE.md, hooks, and Veilpipe on your repos, with secrets kept out of the model. <a href="https://deemwar.com/consulting?utm_source=veilpipe&amp;utm_medium=veilpipe-site&amp;utm_campaign=veilpipe">deemwar.com/consulting</a>. <a href="https://deemwar.com/insights/veilpipe-sample-review?utm_source=veilpipe&amp;utm_medium=veilpipe-site&amp;utm_campaign=sample-review">See a sample review</a></div>
+  <div class="wrap">Veilpipe · Apache-2.0 · Deemwar</div>
+</footer>
+<script>
+document.querySelectorAll('button.copy').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var text = document.getElementById(b.dataset.copy).textContent;
+    var done = function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy'; }, 1500); };
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, function () {});
+  });
+});
+</script>
+</body>
+</html>
