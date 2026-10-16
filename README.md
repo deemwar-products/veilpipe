@@ -128,7 +128,9 @@ veilpipe, or text the model wrote itself (for example a dev password it made up 
 
 Regex finds shapes, not meaning. A secret inside an unbroken base64 run over 4 KB (an image) is not scanned. The raw
 text stays in the transcript or `history.jsonl` for the seconds of a turn. Files over 4 MB are scrubbed by a separate
-`veilpipe` process; if another session keeps writing to the file meanwhile, that scrub waits for the next turn. Mods
+`veilpipe` process; if another session keeps writing to the file meanwhile, that scrub waits for the next turn.
+A tool result over 2 million characters is withheld, not scanned: the model gets
+`veilpipe: output too large to scan for secrets; withheld.`, so narrow the command (`head`, `grep`) and run it again. Mods
 are not sandboxed: read the code before you install it.
 
 The store widens what one bad command can reach: a prompt-injected command in a project can use every value stored for
